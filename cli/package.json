@@ -1,0 +1,8 @@
+{
+  "name": "@board/cli",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "board": "./src/main.ts"
+  }
+}

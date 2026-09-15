@@ -1,0 +1,5 @@
+{
+  "name": "@board/server",
+  "type": "module",
+  "private": true
+}
