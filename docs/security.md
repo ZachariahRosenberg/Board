@@ -58,6 +58,7 @@ If a board needs host capabilities (storage, open-link, clipboard), it goes thro
 | DNS rebinding (attacker domain → 127.0.0.1, defeating CORS/Origin checks) | Strict Host-header allowlist: only `127.0.0.1:PORT` / `localhost:PORT` accepted; never rely on DNS-response filtering |
 | Casual remote exposure | Bind `127.0.0.1` only; the bind-list option for Docker agents is explicit opt-in and documented |
 | Browser probing / reading API responses | No CORS headers, ever — and never `Access-Control-Allow-Origin: null`; no state changes via GET |
+| MCP endpoint abuse (`POST /mcp`) | Agent-token-only — valid human session tokens are rejected (browsers are never MCP clients); same Host allowlist, cross-site rejection, JSON-only + 8 MB body cap as `/api`; stateless JSON mode — no sessions and no SSE stream to hijack, non-POST → 405 |
 
 ## Content rules
 

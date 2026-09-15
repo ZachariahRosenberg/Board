@@ -14,6 +14,7 @@ import {
   rejectCrossSite,
   requireJsonContentType,
 } from "./http.ts";
+import { handleMcpNonPost, handleMcpPost, requireMcpActor } from "./mcp.ts";
 import { boardRoutes } from "./routes/boards.ts";
 import { commentRoutes } from "./routes/comments.ts";
 import { eventRoutes } from "./routes/events.ts";
@@ -334,6 +335,29 @@ async function handleApiRequest(
   }
 }
 
+// The MCP endpoint: same request hardening as /api (DNS-rebinding, CSRF,
+// JSON-only writes), then agent-only bearer auth, then the stateless
+// JSON-mode MCP transport (server/src/mcp.ts).
+async function handleMcpRequest(
+  req: Request,
+  config: Config,
+  db: Database,
+  dataDir: string,
+): Promise<Response> {
+  try {
+    assertAllowedHost(req, config);
+    rejectCrossSite(req);
+    if (req.method !== "POST") {
+      return handleMcpNonPost();
+    }
+    requireJsonContentType(req);
+    const actor = requireMcpActor(req, db);
+    return await handleMcpPost(req, { db, dataDir, actor });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
 function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
 }
@@ -351,6 +375,9 @@ async function handleHostRequest(
   const { pathname } = new URL(req.url);
   if (isApiPath(pathname)) {
     return handleApiRequest(req, config, db, dataDir);
+  }
+  if (pathname === "/mcp") {
+    return handleMcpRequest(req, config, db, dataDir);
   }
   try {
     assertAllowedHost(req, config);

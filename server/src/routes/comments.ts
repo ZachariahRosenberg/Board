@@ -2,6 +2,7 @@ import {
   createComment,
   listComments,
   maxCommentSeq,
+  recordCursorPresence,
   replyComment,
   resolveComment,
 } from "../comments.ts";
@@ -35,27 +36,6 @@ function requireBoard(ctx: RequestContext, boardId: string): Board {
     throw new HttpError(404, "board_not_found", `board "${boardId}" not found`);
   }
   return board;
-}
-
-// Cursor reads double as agent presence (docs/plan.md "Subscriptions, callbacks
-// & presence"): a poll with an agent token refreshes the cursor subscriber row.
-function recordCursorPresence(ctx: RequestContext, boardId: string): void {
-  if (ctx.actor?.kind !== "agent") {
-    return;
-  }
-  ctx.db
-    .prepare(
-      `INSERT INTO subscribers (board_id, agent, kind, last_seq, last_seen)
-       VALUES (?, ?, 'cursor', ?, ?)
-       ON CONFLICT (board_id, agent, kind)
-       DO UPDATE SET last_seq = excluded.last_seq, last_seen = excluded.last_seen`,
-    )
-    .run(
-      boardId,
-      ctx.actor.name,
-      maxCommentSeq(ctx.db, boardId),
-      new Date().toISOString(),
-    );
 }
 
 function bodyFields(ctx: RequestContext): Record<string, unknown> {
@@ -104,7 +84,7 @@ function listCommentsHandler(req: Request, ctx: RequestContext): Response {
     new URL(req.url).searchParams.get("since"),
     "since",
   );
-  recordCursorPresence(ctx, boardId);
+  recordCursorPresence(ctx.db, boardId, ctx.actor);
   const comments = listComments(ctx.db, boardId, since);
   const lastSeq = maxCommentSeq(ctx.db, boardId);
   return jsonOk({

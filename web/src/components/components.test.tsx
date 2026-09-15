@@ -300,7 +300,10 @@ describe("BoardView", () => {
       // crossing another section toward the button must NOT swap the
       // affordance out mid-flight (the reported "clicking does nothing" bug)
       await act(async () => {
-        (content?.querySelector('[data-ba="b1"]') as HTMLElement).dispatchEvent(
+        const section = content?.querySelector('[data-ba="b1"]') as
+          | HTMLElement
+          | undefined;
+        section?.dispatchEvent(
           new window.MouseEvent("mouseover", { bubbles: true }),
         );
       });

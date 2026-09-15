@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Document, Element } from "happy-dom";
 import { Window } from "happy-dom";
-import type { Anchor, Comment, Version } from "./domain.ts";
+import type { Actor, Anchor, Comment, Version } from "./domain.ts";
 import { appendEventDb, mirrorEventFiles } from "./events.ts";
 import { shortId } from "./ids.ts";
 import {
@@ -309,4 +309,29 @@ export function maxCommentSeq(db: Database, boardId: string): number {
     .prepare("SELECT MAX(seq) AS m FROM comments WHERE board_id = ?")
     .get(boardId) as { m: number | null };
   return row.m ?? 0;
+}
+
+// Cursor reads double as agent presence (docs/plan.md "Subscriptions, callbacks
+// & presence"): a poll with an agent token refreshes the cursor subscriber row.
+// No-op for human actors. Lives here (not the route layer) so the MCP
+// board_get_comments poll counts as presence too.
+export function recordCursorPresence(
+  db: Database,
+  boardId: string,
+  actor: Actor | undefined,
+): void {
+  if (actor?.kind !== "agent") {
+    return;
+  }
+  db.prepare(
+    `INSERT INTO subscribers (board_id, agent, kind, last_seq, last_seen)
+     VALUES (?, ?, 'cursor', ?, ?)
+     ON CONFLICT (board_id, agent, kind)
+     DO UPDATE SET last_seq = excluded.last_seq, last_seen = excluded.last_seen`,
+  ).run(
+    boardId,
+    actor.name,
+    maxCommentSeq(db, boardId),
+    new Date().toISOString(),
+  );
 }

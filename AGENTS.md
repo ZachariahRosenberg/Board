@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 `board` is a local-first shared board system: an always-on Bun daemon hosts rich boards (markdown + interactive HTML) that agents publish via MCP/REST, a human annotates with anchored comments in a web UI, and everyone consumes via an append-only event log.
 
-**Current status: M3 complete** — the full feedback loop works over REST: agents publish boards, humans comment in the web UI with anchored text/section/row comments (threads, resolve, live SSE), agents consume feedback via cursors, the feedback grammar, or the event stream. Next up: M5-lite (MCP endpoint + `make install`), then dogfooding. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
+**Current status: M5-lite complete** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 10 tools, stateless Streamable HTTP), humans comment in the web UI with anchored text/section/row comments (threads, resolve, live SSE), agents consume feedback via the comments cursor — the one consumption path (D15). `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M5 webhooks, M4 board-origin boards, M6 assets/import/export, then dogfooding toward v1. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
 
 ## Read order
 
@@ -18,11 +18,12 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 ## Commands
 
-`make list`/`export`/`import` and `make install` arrive with later milestones:
+`make list`/`export`/`import` arrive with later milestones; `make deps` and `make install` are live:
 
 | Task | Command |
 |---|---|
-| Install deps | `bun install` |
+| Install deps | `make deps` (wraps `bun install`) |
+| Wire agents (MCP + skill + tokens) | `make install` (`--force` via `bun run cli/src/main.ts install --force`) |
 | Test | `make test` (wraps `bun test`) |
 | Typecheck | `bunx tsc --noEmit` |
 | Lint + format | `bunx biome check --write .` |

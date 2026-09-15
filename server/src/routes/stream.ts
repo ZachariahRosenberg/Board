@@ -1,3 +1,4 @@
+import { resolveRequestToken } from "../auth.ts";
 import type { Actor, BoardEvent } from "../domain.ts";
 import { getEvents, onEvent } from "../events.ts";
 import { HttpError } from "../http.ts";
@@ -20,14 +21,7 @@ function frame(ev: BoardEvent): string {
 // EventSource cannot set Authorization headers — the ?token= query param is
 // the sanctioned fallback (docs/security.md session model); header preferred.
 function resolveStreamActor(req: Request, db: RequestContext["db"]): Actor {
-  const header = req.headers.get("authorization");
-  let token: string | null = null;
-  if (header?.toLowerCase().startsWith("bearer ") === true) {
-    token = header.slice(7).trim();
-  }
-  if (token === null || token.length === 0) {
-    token = new URL(req.url).searchParams.get("token");
-  }
+  const token = resolveRequestToken(req);
   if (token === null || token.length === 0) {
     throw new HttpError(401, "unauthorized", "missing bearer token");
   }

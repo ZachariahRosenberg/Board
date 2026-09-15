@@ -91,3 +91,15 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Context:** docs/plan.md exposed both `board_get_comments` (raw JSON, cursor-driven) and `board_get_feedback` (the rendered feedback grammar) as MCP tools — two overlapping ways to consume the same data.
 - **Decision (user, 2026-09-15):** The MCP surface ships exactly one consumption path: `board_get_comments` with the `since` cursor — agents interpret the JSON themselves. The feedback grammar stays at the REST layer (`GET /boards/:id/feedback`) for humans, scripts, and reports.
 - **Consequences:** The v1 MCP tool list is 10 tools; the serializer remains maintained and tested (it powers the REST endpoint and future digest tooling). Tool minimalism per the user's one-way preference.
+
+## D16 — MCP over stateless JSON-mode Streamable HTTP — 2026-09-15
+
+- **Context:** the MCP endpoint (`POST /mcp`) needed a transport on Bun — `Bun.serve` is web-standard while the SDK's classic `StreamableHTTPServerTransport` speaks Node `req`/`res`.
+- **Decision:** use the SDK's `WebStandardStreamableHTTPServerTransport` (v1.30+) in stateless JSON mode — `sessionIdGenerator: undefined`, `enableJsonResponse: true`, a fresh `McpServer` + transport per POST. No sessions, no GET SSE stream on `/mcp` (non-POST → 405); agents receive feedback by polling comments (D15), so the daemon never holds a long-lived MCP connection.
+- **Consequences:** one request = one JSON response; MCP requests get the same hardening as `/api` (Host allowlist, cross-site rejection, JSON-only bodies, 8 MB cap) and agent-only auth (human session tokens rejected). Had the web-standard transport not existed, the fallback was a hand-rolled Transport over the SDK protocol layer.
+
+## D17 — Token names are permanent; `--force` mints suffixed — 2026-09-15
+
+- **Context:** `board install --force` re-mints an agent's token, but `tokens.name` is the PRIMARY KEY — a revoked row holds its name forever.
+- **Decision:** `--force` revokes the old token, then mints under the first free suffix (`board-<agent>`, `board-<agent>-2`, …). Revocation kills the old credential immediately; the suffix is the visible trace of the re-mint.
+- **Consequences:** token names are not stable identifiers across re-mints — `token list` shows the suffix history. The alternative (deleting rows) would erase the audit trail of a token's lifecycle.

@@ -4,6 +4,19 @@ import { HttpError } from "./http.ts";
 import { verifySessionToken } from "./sessions.ts";
 import { verifyToken } from "./tokens.ts";
 
+// Bearer header preferred; ?token= query fallback for clients that cannot set
+// headers (EventSource). Shared by the SSE stream and the MCP endpoint (D13).
+export function resolveRequestToken(req: Request): string | null {
+  const header = req.headers.get("authorization");
+  if (header?.toLowerCase().startsWith("bearer ") === true) {
+    const token = header.slice(7).trim();
+    if (token.length > 0) {
+      return token;
+    }
+  }
+  return new URL(req.url).searchParams.get("token");
+}
+
 export function requireAuth(req: Request, db: Database): Actor {
   const header = req.headers.get("authorization");
   if (header === null) {

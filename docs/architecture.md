@@ -45,6 +45,8 @@ Every version is stored and served as **one HTML document**. `format` (markdown 
 
 **Agents consume.** Per-agent cursors (`workspace:agent`) return exactly the unacknowledged backlog; `GET /boards/:id/feedback` serializes unresolved threads as the feedback markdown grammar (human-readable, agent-parseable); presence is derived from real behavior — SSE connections, cursor reads, and webhook registrations — not from heartbeats agents must remember to send.
 
+**MCP (agents, first-class).** `POST /mcp` on the host port speaks Streamable HTTP in stateless JSON mode (D16): every request gets a fresh MCP server + transport (no sessions, no GET SSE stream; non-POST → 405), auth is agent-token-only (header or `?token=`; valid human session tokens are rejected), and tools call the same service-layer functions the REST routes call — MCP agents and REST agents are indistinguishable in the event log. The 10-tool surface is defined in [plan.md](plan.md); feedback consumption is one path (D15): `board_get_comments` + `since` cursor.
+
 ## Events
 
 Global monotonic `seq`; every mutation is one event: `board.created/published/ended/restored`, `comment.created/replied/resolved`, `asset.added`, `agent.subscribed`, `webhook.failed`, … Events are append-only (an invariant) and the audit view is a filter over them.

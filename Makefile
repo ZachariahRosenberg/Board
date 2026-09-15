@@ -1,7 +1,12 @@
-.PHONY: install test typecheck lint serve dev token web open
+.PHONY: deps install test typecheck lint serve dev token web open
 
-install:
+deps:
 	bun install
+
+# wire the board MCP server into local agents + mint per-agent tokens.
+# GNU make eats dash-flags, so for --force run `bun run cli/src/main.ts install --force`.
+install:
+	bun run cli/src/main.ts install $(filter-out $@,$(MAKECMDGOALS))
 
 test:
 	bun test

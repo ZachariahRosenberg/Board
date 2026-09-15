@@ -2,6 +2,11 @@
 
 import { loadConfig } from "../../server/src/config.ts";
 import { openDb } from "../../server/src/db.ts";
+import {
+  INSTALL_USAGE,
+  parseInstallArgs,
+  runInstallCommand,
+} from "./commands/install.ts";
 import { runOpenCommand } from "./commands/open.ts";
 import { runServe } from "./commands/serve.ts";
 import {
@@ -19,6 +24,7 @@ commands:
   token add <name>     create an agent token; printed once, never recoverable
   token list           list tokens: name, created, last used, revoked
   token revoke <name>  revoke an agent token
+  install              wire the board MCP server into local agents (mints tokens)
   list                 (not yet implemented)
   open [board id]      open the web UI in a browser (one-time token)
   export               (not yet implemented)
@@ -66,6 +72,23 @@ export function main(argv: string[]): number {
       const db = openDb(config.dataDir);
       try {
         return runTokenCommand({ db, argv: rest, io: consoleIo() });
+      } finally {
+        db.close();
+      }
+    }
+    case "install": {
+      // Validate before opening the db: usage-error paths must not create the
+      // data dir (same footgun as `token`). runInstallCommand re-parses its
+      // argv so tests can drive it standalone; the parse is cheap.
+      if (typeof parseInstallArgs(rest) === "string") {
+        console.error(INSTALL_USAGE);
+        return 1;
+      }
+      // Same sanctioned local-db path as token: the human's tool.
+      const config = loadConfig();
+      const db = openDb(config.dataDir);
+      try {
+        return runInstallCommand({ db, argv: rest, io: consoleIo() });
       } finally {
         db.close();
       }

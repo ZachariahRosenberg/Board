@@ -4,5 +4,8 @@
   "private": true,
   "bin": {
     "board": "./src/main.ts"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
   }
 }
