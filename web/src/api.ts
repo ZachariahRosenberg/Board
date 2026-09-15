@@ -44,6 +44,11 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (token !== null) {
     headers.set("authorization", `Bearer ${token}`);
   }
+  // Every write carries a JSON body — the daemon rejects anything else (415,
+  // docs/security.md CSRF defense); browsers default fetch bodies to text/plain
+  if (init?.body !== undefined && headers.get("content-type") === null) {
+    headers.set("content-type", "application/json");
+  }
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
     // the session died — drop it and let the app show the gate (run make open)

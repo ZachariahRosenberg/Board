@@ -85,3 +85,9 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Context:** D10 made the Makefile the operational interface with no auto-spawn magic. The seamless workflow — an agent mid-task spins up boardd when it needs a human decision, shares a session link, and owns the daemon lifecycle — is the natural endgame for the dogfood loop.
 - **Decision (user, 2026-09-15):** Defer to phase 2. For the MVP the human keeps the server running; the `board_status` tool and the skill detect a down daemon and instruct recovery (`make serve`). Full agent lifecycle management (spawn via tmux/nohup, link sharing, shutdown) gets its own decision later, with explicit safety boundaries.
 - **Consequences:** M5-lite ships without lifecycle tools; the skill documents the manual path. The daemon-down case stays a first-class detectable state, not a mystery failure.
+
+## D15 — One agent-facing consumption path: comments only — 2026-09-15
+
+- **Context:** docs/plan.md exposed both `board_get_comments` (raw JSON, cursor-driven) and `board_get_feedback` (the rendered feedback grammar) as MCP tools — two overlapping ways to consume the same data.
+- **Decision (user, 2026-09-15):** The MCP surface ships exactly one consumption path: `board_get_comments` with the `since` cursor — agents interpret the JSON themselves. The feedback grammar stays at the REST layer (`GET /boards/:id/feedback`) for humans, scripts, and reports.
+- **Consequences:** The v1 MCP tool list is 10 tools; the serializer remains maintained and tested (it powers the REST endpoint and future digest tooling). Tool minimalism per the user's one-way preference.

@@ -70,7 +70,7 @@ one process: boardd (Bun.serve x2)
 
 ## MCP server (Streamable HTTP, `:7800/mcp`, rev 2026-07-28, `@modelcontextprotocol/sdk`)
 
-Tools: `board_create`, `board_publish`, `board_list`, `board_get`, `board_get_comments(since)`, `board_get_feedback`, `board_reply`, `board_resolve`, `board_end`, `board_upload_image`, `board_subscribe` (presence + optional webhook registration), `board_export`, `board_status`. No wait/blocking tool (async-only). Optional: `board://<id>` resources (list/read) if time allows.
+Tools: `board_create`, `board_publish`, `board_list`, `board_get`, `board_get_comments(since)`, `board_reply`, `board_resolve`, `board_restore`, `board_end`, `board_status` (v1 — REST parity, D15: comments+cursor is the one consumption path; `board_upload_image`, `board_subscribe`, `board_export` follow with M6 / the rest of M5). No wait/blocking tool (async-only). Optional: `board://<id>` resources (list/read) if time allows.
 
 Async consumption loop (documented in skill): publish → `board_get_comments?since=cursor` on each iteration / on task boundaries; or tail `~/.board/events.jsonl`.
 

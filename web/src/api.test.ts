@@ -159,6 +159,13 @@ describe("api client", () => {
       }),
     );
     expect(calls[1].init?.body).toBe(JSON.stringify({ body: "a reply" }));
+    // every write must carry application/json — the daemon 415s anything else
+    // (the bug that broke browser commenting: fetch defaults to text/plain)
+    for (const call of calls.slice(0, 3)) {
+      expect(new Headers(call.init?.headers).get("content-type")).toBe(
+        "application/json",
+      );
+    }
     clearSessionToken();
   });
 
