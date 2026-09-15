@@ -159,6 +159,31 @@ describe("host server static serving (built dist)", () => {
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("method_not_allowed");
   });
+
+  test("hashed /assets/* cache immutably; index, fonts, and SPA fallback revalidate", async () => {
+    // A rebuild wipes old hashed assets — a tab must never keep running a
+    // stale bundle, so everything unhashed is no-cache (dogfooded the hard
+    // way: a "missing" Enter-to-submit fix was an old cached bundle).
+    const root = makeFixtureRoot(true);
+    mkdirSync(join(root, "web", "dist", "fonts"), { recursive: true });
+    writeFileSync(join(root, "web", "dist", "fonts", "fixture.woff2"), "font");
+    const s = serverWith(root);
+
+    const index = await s.api.get("/");
+    expect(index.headers.get("cache-control")).toBe("no-cache");
+
+    const js = await s.api.get("/assets/app.js");
+    expect(js.headers.get("cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+
+    const font = await s.api.get("/fonts/fixture.woff2");
+    expect(font.status).toBe(200);
+    expect(font.headers.get("cache-control")).toBe("no-cache");
+
+    const spa = await s.api.get("/some/spa/route");
+    expect(spa.headers.get("cache-control")).toBe("no-cache");
+  });
 });
 
 describe("host server static serving (dist not built)", () => {

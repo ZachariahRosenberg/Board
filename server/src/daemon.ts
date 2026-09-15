@@ -221,6 +221,17 @@ function hasExtension(rel: string): boolean {
   return rel.slice(rel.lastIndexOf("/") + 1).includes(".");
 }
 
+// SPA cache policy: vite emits content-hashed files under assets/ — those are
+// immutable forever. Everything else (index.html, the SPA shell fallback,
+// fonts) revalidates on every load so a rebuild can never leave a tab running
+// a stale bundle (dogfooded the hard way: Enter-to-submit "missing" was an old
+// cached bundle; the new one was on disk all along).
+function cacheControlFor(rel: string): string {
+  return rel.startsWith("assets/")
+    ? "public, max-age=31536000, immutable"
+    : "no-cache";
+}
+
 // Static serving for the host server: real files, the SPA shell for
 // extensionless unknown paths (hash routing means routes never hit the
 // server), and a pointed 404 when the SPA simply isn't built.
@@ -238,14 +249,15 @@ function serveWebPath(
   }
   const index = join(webDist, "index.html");
   const candidate = rel.length === 0 ? index : join(webDist, rel);
+  const cacheHeaders = { ...headers, "cache-control": cacheControlFor(rel) };
   if (isFile(candidate)) {
-    return staticFileResponse(candidate, headers);
+    return staticFileResponse(candidate, cacheHeaders);
   }
   if (rel.length === 0 || hasExtension(rel)) {
     return jsonError(404, "not_found", "not found", headers);
   }
   if (isFile(index)) {
-    return staticFileResponse(index, headers);
+    return staticFileResponse(index, cacheHeaders);
   }
   return jsonError(404, "not_found", "not found", headers);
 }
