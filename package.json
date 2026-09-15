@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "server",
-    "cli"
+    "cli",
+    "web"
   ],
   "scripts": {
     "test": "bun test",

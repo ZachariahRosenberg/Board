@@ -1,0 +1,267 @@
+:root {
+  color-scheme: light dark;
+  --fg: #1c2128;
+  --fg-muted: #59636e;
+  --bg: #ffffff;
+  --bg-subtle: #f6f8fa;
+  --border: #d1d9e0;
+  --accent: #0969da;
+  --open: #1a7f37;
+  --ended: #59636e;
+  --error: #cf222e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #f0f6fc;
+    --fg-muted: #9198a1;
+    --bg: #0d1117;
+    --bg-subtle: #161b22;
+    --border: #3d444d;
+    --accent: #4493f8;
+    --open: #3fb950;
+    --ended: #9198a1;
+    --error: #f85149;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+.container {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.status,
+.empty {
+  color: var(--fg-muted);
+  padding: 32px 0;
+  text-align: center;
+}
+
+.error {
+  color: var(--error);
+  padding: 16px;
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  margin: 16px 0;
+}
+
+.notice {
+  color: var(--fg-muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.gate {
+  max-width: 420px;
+  margin: 15vh auto;
+  text-align: center;
+}
+
+.gate h1 {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+}
+
+.gate-hint {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+.gate form {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.gate input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+.board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.board-card {
+  display: block;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.board-card:hover {
+  border-color: var(--accent);
+}
+
+.board-card.ended {
+  opacity: 0.65;
+}
+
+.board-card-title {
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.board-card-meta {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: var(--fg-muted);
+  font-size: 0.85em;
+  margin-top: 6px;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge.open {
+  color: var(--open);
+  border: 1px solid var(--open);
+}
+
+.badge.ended {
+  color: var(--ended);
+  border: 1px solid var(--ended);
+}
+
+.board-card-tags {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  font-size: 0.75em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.board-header h1 {
+  margin: 8px 0 4px;
+  font-size: 1.5em;
+}
+
+.back {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9em;
+}
+
+.back:hover {
+  color: var(--accent);
+}
+
+.version-switcher {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.pill {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.pill.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.board-content {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px 32px;
+  background: var(--bg);
+}
+
+.board-content table {
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.board-content th,
+.board-content td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+}
+
+.board-content pre {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+
+.board-content code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.board-content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.board-content code {
+  background: var(--bg-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.board-content blockquote {
+  border-left: 3px solid var(--border);
+  margin: 12px 0;
+  padding: 2px 16px;
+  color: var(--fg-muted);
+}
+
+.board-content img {
+  max-width: 100%;
+}
+
+.board-content .mermaid {
+  text-align: center;
+}

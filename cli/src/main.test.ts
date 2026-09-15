@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -102,5 +102,13 @@ describe("board cli", () => {
     expect(proc.exitCode).toBe(1);
     expect(proc.stderr).toContain("frobnicate");
     expect(proc.stderr).toContain("serve");
+  });
+
+  test("bare token (usage error) never creates the default data dir", () => {
+    const home = freshDir();
+    const proc = runCli(["token"], { HOME: home });
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr).toContain("usage");
+    expect(existsSync(join(home, ".board"))).toBe(false);
   });
 });

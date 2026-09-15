@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 `board` is a local-first shared board system: an always-on Bun daemon hosts rich boards (markdown + interactive HTML) that agents publish via MCP/REST, a human annotates with anchored comments in a web UI, and everyone consumes via an append-only event log.
 
-**Current status: M1 complete** — daemon, storage, board bundles, events, auth, and board/version CRUD are live. Next up: M2 (web shell). The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
+**Current status: M2 complete** — daemon, storage, events, auth, board/version CRUD, and the web shell (board list, host-chrome board rendering, version switcher, `make open` session flow) are live. Next up: M3 (comments + anchoring). The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
 
 ## Read order
 
@@ -18,7 +18,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 ## Commands
 
-M1 commands are live. `make open` arrives with M2 (web UI); `make list`/`export`/`import` and `make install` with later milestones:
+`make list`/`export`/`import` and `make install` arrive with later milestones:
 
 | Task | Command |
 |---|---|
@@ -29,7 +29,8 @@ M1 commands are live. `make open` arrives with M2 (web UI); `make list`/`export`
 | Run daemon | `make serve` |
 | Dev (hot reload) | `make dev` |
 | Mint agent token | `make token add <name>` |
-| Open UI | `make open` (M2) |
+| Build web app | `make web` |
+| Open UI | `make open [board id]` |
 
 Run typecheck, lint, and tests before finishing any change. If a command doesn't exist yet, you're early — don't invent behavior that contradicts the plan.
 

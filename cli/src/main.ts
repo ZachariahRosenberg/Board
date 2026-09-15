@@ -4,7 +4,11 @@ import { loadConfig } from "../../server/src/config.ts";
 import { openDb } from "../../server/src/db.ts";
 import { runOpenCommand } from "./commands/open.ts";
 import { runServe } from "./commands/serve.ts";
-import { type CommandIo, runTokenCommand } from "./commands/token.ts";
+import {
+  type CommandIo,
+  runTokenCommand,
+  TOKEN_USAGE,
+} from "./commands/token.ts";
 
 const USAGE = `board — local-first shared boards
 
@@ -50,6 +54,13 @@ export function main(argv: string[]): number {
       runServe();
       return 0;
     case "token": {
+      // Validate before opening the db: usage-error paths must not create the
+      // data dir (twice-bitten footgun — an empty ~/.board from `make token`).
+      const [sub] = rest;
+      if (sub !== "add" && sub !== "list" && sub !== "revoke") {
+        console.error(TOKEN_USAGE);
+        return 1;
+      }
       // Invariant 4 bars agents from writing ~/.board directly; this CLI is the human's local tool, so opening the db here is the sanctioned path.
       const config = loadConfig();
       const db = openDb(config.dataDir);

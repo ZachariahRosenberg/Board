@@ -18,7 +18,7 @@ export interface TokenCommandInput {
   io: CommandIo;
 }
 
-const TOKEN_USAGE =
+export const TOKEN_USAGE =
   "usage: board token add <name> | board token list | board token revoke <name>";
 
 function tokenAdd(db: Database, name: string, io: CommandIo): number {

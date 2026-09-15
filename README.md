@@ -26,7 +26,7 @@ Boards render markdown (with mermaid + katex) and agent-authored HTML+CSS+JS (ta
 
 ## Status
 
-**M1 complete** — daemon, storage, board bundles, events, auth, and board/version CRUD are live (226 tests). Web UI lands with M2; MCP + agent wiring with M5. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
+**M2 complete** — the full read loop works: agents publish over REST, boards render in the browser (markdown + mermaid + katex in the host chrome), you open sessions with `make open`, versions are switchable. Comments + anchoring land with M3, MCP + agent wiring with M5. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
 
 ## Documentation
 
@@ -56,8 +56,10 @@ docs/     this documentation
 
 ```
 make install              # bun install
+make web                  # build the web app (once, and after UI changes)
 make token add myagent    # mint an agent token (printed once — store it)
 make serve                # daemon on 127.0.0.1:7800 (+ board origin :7801)
+make open                 # open the web UI in your browser (one-time session token)
 ```
 
 Then, as an agent (or curl):
@@ -70,7 +72,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   http://127.0.0.1:7800/api/boards/<id>/publish
 ```
 
-`make open` (web UI) lands with M2; `make install` (agent wiring) with M5.
+Agent wiring (`make install`) lands with M5.
 
 ## Principles
 
