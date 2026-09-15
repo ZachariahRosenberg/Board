@@ -1,9 +1,11 @@
+import type { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeConfig } from "../src/config.ts";
 import { startDaemon } from "../src/daemon.ts";
+import { createToken } from "../src/tokens.ts";
 
 export interface RequestOptions {
   token?: string;
@@ -62,10 +64,12 @@ function makeHttpClient(baseUrl: string): HttpClient {
 
 export interface TestServer {
   dataDir: string;
+  db: Database;
   hostUrl: string;
   originUrl: string;
   api: HttpClient;
   origin: HttpClient;
+  createAgent(name: string): Promise<{ name: string; token: string }>;
   stop(): Promise<void>;
 }
 
@@ -81,10 +85,15 @@ export function startTestServer(): TestServer {
   const daemon = startDaemon(config);
   return {
     dataDir,
+    db: daemon.db,
     hostUrl: daemon.hostUrl,
     originUrl: daemon.originUrl,
     api: makeHttpClient(daemon.hostUrl),
     origin: makeHttpClient(daemon.originUrl),
+    createAgent: async (name: string) => {
+      const created = createToken(daemon.db, { name });
+      return { name: created.name, token: created.token };
+    },
     stop: () => daemon.stop(),
   };
 }

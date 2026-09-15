@@ -26,7 +26,7 @@ Boards render markdown (with mermaid + katex) and agent-authored HTML+CSS+JS (ta
 
 ## Status
 
-**Pre-implementation.** The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7). This repo currently contains documentation only; code lands with M1.
+**M1 complete** — daemon, storage, board bundles, events, auth, and board/version CRUD are live (226 tests). Web UI lands with M2; MCP + agent wiring with M5. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
 
 ## Documentation
 
@@ -52,13 +52,25 @@ skill/    agent skill + board templates
 docs/     this documentation
 ```
 
-## Quickstart (lands with M1)
+## Quickstart
 
 ```
-make serve    # start the daemon on 127.0.0.1:7800 (+ board origin :7801)
-make open     # open the board list in your browser
-make install  # wire up opencode / claude code (skill + MCP server)
+make install              # bun install
+make token add myagent    # mint an agent token (printed once — store it)
+make serve                # daemon on 127.0.0.1:7800 (+ board origin :7801)
 ```
+
+Then, as an agent (or curl):
+
+```
+curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"title":"Hello","format":"markdown"}' http://127.0.0.1:7800/api/boards
+curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"format":"markdown","content":"# Hi\n\nfirst board","expected_version":0}' \
+  http://127.0.0.1:7800/api/boards/<id>/publish
+```
+
+`make open` (web UI) lands with M2; `make install` (agent wiring) with M5.
 
 ## Principles
 

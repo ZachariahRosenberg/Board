@@ -36,11 +36,16 @@ export class VersionNotFound extends StoreError {
 }
 
 export class VersionConflict extends StoreError {
+  readonly expected: number;
+  readonly current: number;
+
   constructor(boardId: string, expected: number, current: number) {
     super(
       `version conflict on board "${boardId}": expected ${expected}, current ${current}`,
     );
     this.name = "VersionConflict";
+    this.expected = expected;
+    this.current = current;
   }
 }
 

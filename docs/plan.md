@@ -109,7 +109,7 @@ Async consumption loop (documented in skill): publish → `board_get_comments?si
 
 ## Milestones (each ends runnable + verified)
 
-- **M1** Scaffold (Bun workspaces monorepo: `server/`, `web/`, `cli/`, `skill/`, `docs/`), daemon on two ports, SQLite + WAL, board-bundle layout, global + per-board events (dual-write), auth middleware (Host/Sec-Fetch/bearer), board + version CRUD with the unified HTML document model (markdown rendered at publish), 409 conflict, Makefile, `tsc --noEmit` + biome + `bun test` wired
+- **M1** Scaffold (Bun workspaces monorepo: `server/`, `web/`, `cli/`, `skill/`, `docs/`), daemon on two ports, SQLite + WAL, board-bundle layout, global + per-board events (dual-write), auth middleware (Host/Sec-Fetch/bearer), board + version CRUD with the unified HTML document model (markdown rendered at publish), 409 conflict, Makefile, `tsc --noEmit` + biome + `bun test` wired — **done 2026-09-15** (226 tests green; restore rejects on ended boards per spec; happy-dom↔DOMPurify compat patches logged as D11)
 - **M2** Web shell: board list, markdown-derived boards rendered in host chrome (marked → DOMPurify → mermaid → katex, auto `data-ba`), version switcher, token exchange flow
 - **M3** Comments + anchoring (section, text-highlight, and table-row anchors; re-anchor by quote), sidebar w/ threads + resolve, SSE live updates, feedback-markdown serializer, per-agent comment cursors
 - **M4** HTML boards: `:7801` serving + security headers, sandboxed iframe embed, vendored/pinned mermaid+tailwind+plotly+katex, publish-time anchor extraction (`data-ba`), HTML dashboard template working end-to-end inside the sandbox

@@ -75,6 +75,24 @@ describe("jsonError", () => {
     });
     expect(res.headers.get("allow")).toBe("GET");
   });
+
+  test("merges details into the error object", async () => {
+    const res = jsonError(
+      409,
+      "version_conflict",
+      "stale expected_version",
+      {},
+      { current_version: 2 },
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: {
+        code: "version_conflict",
+        message: "stale expected_version",
+        current_version: 2,
+      },
+    });
+  });
 });
 
 describe("HttpError", () => {

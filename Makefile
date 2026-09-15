@@ -18,5 +18,8 @@ serve:
 dev:
 	bun --watch server/src/main.ts
 
+# `make token add myagent` — pass-through args (plan.md: make token add|list| revoke AGENT)
 token:
-	bun run cli/src/main.ts token $(ARGS)
+	bun run cli/src/main.ts token $(filter-out $@,$(MAKECMDGOALS))
+%:
+	@:

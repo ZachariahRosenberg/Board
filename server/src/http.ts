@@ -27,8 +27,13 @@ export function jsonError(
   code: string,
   message: string,
   headers: Record<string, string> = {},
+  details: Record<string, unknown> = {},
 ): Response {
-  return jsonResponse(status, { error: { code, message } }, headers);
+  return jsonResponse(
+    status,
+    { error: { code, message, ...details } },
+    headers,
+  );
 }
 
 function jsonResponse(
