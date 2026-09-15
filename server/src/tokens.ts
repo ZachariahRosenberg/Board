@@ -1,0 +1,132 @@
+import type { Database } from "bun:sqlite";
+import { createHash, getRandomValues } from "node:crypto";
+import type { TokenInfo } from "./domain.ts";
+
+export class TokenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TokenError";
+  }
+}
+
+export class TokenNameTaken extends TokenError {
+  constructor(message: string) {
+    super(message);
+    this.name = "TokenNameTaken";
+  }
+}
+
+export interface CreatedToken {
+  name: string;
+  token: string;
+  scopes: string[];
+  created_at: string;
+}
+
+interface TokenRow {
+  name: string;
+  token_hash: string;
+  scopes: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+// docs/security.md "Content rules": random ≥128-bit — we use 256-bit; base64url keeps it header/config copy-paste safe.
+const TOKEN_BYTES = 32;
+
+// Invariant 8 (AGENTS.md): tokens are stored as SHA-256 only; the plaintext exists solely in createToken's return value.
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function newToken(): string {
+  return Buffer.from(getRandomValues(new Uint8Array(TOKEN_BYTES))).toString(
+    "base64url",
+  );
+}
+
+function parseScopes(raw: string): string[] {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function toInfo(row: TokenRow): TokenInfo {
+  return {
+    name: row.name,
+    scopes: parseScopes(row.scopes),
+    created_at: row.created_at,
+    last_used_at: row.last_used_at,
+    revoked_at: row.revoked_at,
+  };
+}
+
+export function createToken(
+  db: Database,
+  opts: { name: string; scopes?: string[] },
+): CreatedToken {
+  const scopes = opts.scopes ?? [];
+  const token = newToken();
+  const createdAt = new Date().toISOString();
+  try {
+    db.prepare(
+      "INSERT INTO tokens (name, token_hash, scopes, created_at) VALUES (?, ?, ?, ?)",
+    ).run(opts.name, hashToken(token), JSON.stringify(scopes), createdAt);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      message.includes("UNIQUE constraint failed") &&
+      message.includes("tokens.name")
+    ) {
+      throw new TokenNameTaken(`a token named "${opts.name}" already exists`);
+    }
+    throw err;
+  }
+  return { name: opts.name, token, scopes, created_at: createdAt };
+}
+
+export function verifyToken(db: Database, token: string): TokenInfo | null {
+  const row = db
+    .prepare("SELECT * FROM tokens WHERE token_hash = ?")
+    .get(hashToken(token)) as TokenRow | null;
+  if (row === null || row.revoked_at !== null) {
+    return null;
+  }
+  const lastUsedAt = new Date().toISOString();
+  db.prepare("UPDATE tokens SET last_used_at = ? WHERE name = ?").run(
+    lastUsedAt,
+    row.name,
+  );
+  return { ...toInfo(row), last_used_at: lastUsedAt };
+}
+
+export function revokeToken(db: Database, name: string): TokenInfo | null {
+  const row = db
+    .prepare("SELECT * FROM tokens WHERE name = ?")
+    .get(name) as TokenRow | null;
+  if (row === null) {
+    return null;
+  }
+  if (row.revoked_at !== null) {
+    return toInfo(row);
+  }
+  const revokedAt = new Date().toISOString();
+  db.prepare("UPDATE tokens SET revoked_at = ? WHERE name = ?").run(
+    revokedAt,
+    name,
+  );
+  return { ...toInfo(row), revoked_at: revokedAt };
+}
+
+export function listTokens(db: Database): TokenInfo[] {
+  const rows = db
+    .prepare("SELECT * FROM tokens ORDER BY name")
+    .all() as TokenRow[];
+  return rows.map(toInfo);
+}

@@ -1,4 +1,4 @@
-.PHONY: install test typecheck lint serve dev
+.PHONY: install test typecheck lint serve dev token
 
 install:
 	bun install
@@ -17,3 +17,6 @@ serve:
 
 dev:
 	bun --watch server/src/main.ts
+
+token:
+	bun run cli/src/main.ts token $(ARGS)

@@ -1,0 +1,189 @@
+import type { Database } from "bun:sqlite";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openDb } from "../../../server/src/db.ts";
+import { verifyToken } from "../../../server/src/tokens.ts";
+import { type CommandIo, runTokenCommand } from "./token.ts";
+
+const dirs: string[] = [];
+
+afterAll(() => {
+  for (const dir of dirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Tests never touch the real ~/.board — always a fresh temp data dir (AGENTS.md).
+function freshDb(): Database {
+  const dir = mkdtempSync(join(tmpdir(), "board-cli-test-"));
+  dirs.push(dir);
+  return openDb(dir);
+}
+
+interface Capture {
+  out: string[];
+  err: string[];
+  io: CommandIo;
+}
+
+function capture(): Capture {
+  const out: string[] = [];
+  const err: string[] = [];
+  return {
+    out,
+    err,
+    io: {
+      stdout: (text) => {
+        out.push(text);
+      },
+      stderr: (text) => {
+        err.push(text);
+      },
+    },
+  };
+}
+
+const TOKEN_LINE = /^[A-Za-z0-9_-]{43}$/;
+
+function findToken(lines: string[]): string | undefined {
+  return lines.find((line) => TOKEN_LINE.test(line));
+}
+
+describe("board token add", () => {
+  test("exits 0, prints the token exactly once, and warns it is unrecoverable", () => {
+    const db = freshDb();
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ db, argv: ["add", "smoke-agent"], io });
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    const text = out.join("\n");
+    const token = findToken(out);
+    expect(token).toBeDefined();
+    expect(text.split(token ?? "")).toHaveLength(2);
+    expect(text).toContain("not recoverable");
+    expect(verifyToken(db, token ?? "")?.name).toBe("smoke-agent");
+    const row = db
+      .prepare("SELECT token_hash FROM tokens WHERE name = ?")
+      .get("smoke-agent") as { token_hash: string };
+    expect(text).not.toContain(row.token_hash);
+    db.close();
+  });
+
+  test("a duplicate name exits 1 on stderr without printing a token", () => {
+    const db = freshDb();
+    const first = capture();
+    expect(runTokenCommand({ db, argv: ["add", "alice"], io: first.io })).toBe(
+      0,
+    );
+    const second = capture();
+    const code = runTokenCommand({ db, argv: ["add", "alice"], io: second.io });
+    expect(code).toBe(1);
+    expect(second.err.join("\n")).toContain("alice");
+    expect(findToken(second.out)).toBeUndefined();
+    db.close();
+  });
+
+  test("a missing name prints usage and exits 1", () => {
+    const db = freshDb();
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ db, argv: ["add"], io });
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("usage");
+    expect(out).toEqual([]);
+    db.close();
+  });
+});
+
+describe("board token list", () => {
+  test("renders an aligned table with names, timestamps, and revoked state", () => {
+    const db = freshDb();
+    const add = capture();
+    runTokenCommand({ db, argv: ["add", "alpha"], io: add.io });
+    runTokenCommand({ db, argv: ["add", "beta"], io: capture().io });
+    verifyToken(db, findToken(add.out) ?? "");
+
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ db, argv: ["list"], io });
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    const header = out[0] ?? "";
+    expect(header).toContain("NAME");
+    expect(header).toContain("CREATED");
+    expect(header).toContain("LAST USED");
+    expect(header).toContain("REVOKED");
+    const alphaRow = out.find((line) => line.startsWith("alpha"));
+    const betaRow = out.find((line) => line.startsWith("beta"));
+    expect(alphaRow).toBeDefined();
+    expect(betaRow).toBeDefined();
+    expect(betaRow ?? "").toContain("never");
+    expect(alphaRow ?? "").not.toContain("never");
+    expect(alphaRow ?? "").toContain("no");
+    expect((alphaRow ?? "").indexOf("20")).toBe(header.indexOf("CREATED"));
+    expect((betaRow ?? "").indexOf("20")).toBe(header.indexOf("CREATED"));
+
+    runTokenCommand({ db, argv: ["revoke", "beta"], io: capture().io });
+    const afterRevoke = capture();
+    runTokenCommand({ db, argv: ["list"], io: afterRevoke.io });
+    const betaAfter = afterRevoke.out.find((line) => line.startsWith("beta"));
+    expect(betaAfter ?? "").toContain("yes");
+
+    const text = [...out, ...afterRevoke.out].join("\n");
+    expect(text).not.toContain(
+      (
+        db
+          .prepare("SELECT token_hash FROM tokens WHERE name = 'alpha'")
+          .get() as { token_hash: string }
+      ).token_hash,
+    );
+    expect(text).not.toContain(findToken(add.out) ?? "");
+    db.close();
+  });
+
+  test("reports when there are no tokens yet", () => {
+    const db = freshDb();
+    const { out, io } = capture();
+    expect(runTokenCommand({ db, argv: ["list"], io })).toBe(0);
+    expect(out.join("\n")).toContain("no tokens");
+    db.close();
+  });
+});
+
+describe("board token revoke", () => {
+  test("confirms revocation and the token stops verifying", () => {
+    const db = freshDb();
+    const add = capture();
+    runTokenCommand({ db, argv: ["add", "gamma"], io: add.io });
+    const token = findToken(add.out) ?? "";
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ db, argv: ["revoke", "gamma"], io });
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    expect(out.join("\n")).toContain("gamma");
+    expect(verifyToken(db, token)).toBeNull();
+    db.close();
+  });
+
+  test("an unknown name exits 1 on stderr", () => {
+    const db = freshDb();
+    const { out, err, io } = capture();
+    const code = runTokenCommand({ db, argv: ["revoke", "nobody"], io });
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("nobody");
+    expect(out).toEqual([]);
+    db.close();
+  });
+});
+
+describe("board token dispatch", () => {
+  test("a missing or unknown subcommand prints usage and exits 1", () => {
+    const db = freshDb();
+    for (const argv of [[], ["frobnicate"]]) {
+      const { err, io } = capture();
+      expect(runTokenCommand({ db, argv, io })).toBe(1);
+      expect(err.join("\n")).toContain("usage");
+    }
+    db.close();
+  });
+});
