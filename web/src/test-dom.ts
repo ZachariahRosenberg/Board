@@ -31,9 +31,14 @@ export class StubEventSource {
 }
 
 // happy-dom globals for the web tests (no browser, no jsdom): install exactly
-// what the app + react-dom/client touch, nothing more.
+// what the app + react-dom/client touch, nothing more. JavaScript evaluation
+// is enabled so the D18 host-render path (mountBoardDocument re-creating
+// board scripts) behaves like a real browser in tests.
 export function installDom(): Window {
-  const window = new Window({ url: "http://127.0.0.1:5173/" });
+  const window = new Window({
+    url: "http://127.0.0.1:5173/",
+    settings: { enableJavaScriptEvaluation: true },
+  });
   StubEventSource.instances = [];
   Object.assign(globalThis, {
     window,

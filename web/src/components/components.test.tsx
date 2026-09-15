@@ -37,7 +37,6 @@ mock.module("mermaid", () => ({
 
 const versionCalls: Array<[string, number]> = [];
 const exchangeCalls: string[] = [];
-const ORIGIN = "http://127.0.0.1:7801";
 
 const MD_BOARD: Board & { unresolved_comments: number } = {
   id: "b1",
@@ -139,6 +138,44 @@ const MD_VERSION: Version = {
   created_at: "2026-09-15T11:00:00.000Z",
 };
 
+// Full agent documents (head styles + body + scripts) as the publish
+// pipeline now stores them (D18): ids injected server-side, scripts kept.
+function htmlDoc(heading: string, style: string): string {
+  return [
+    "<!doctype html><html><head><title>Dashboard</title>",
+    `<style>${style}</style>`,
+    "</head><body>",
+    '<section data-ba="s-header" data-ba-label="Header">',
+    `<h1>${heading}</h1></section>`,
+    "<p>unlabeled tail</p>",
+    '<script src="/libs/chart-4.4.9.umd.min.js"></script>',
+    "<script>window.__dashMounted = true;</script>",
+    "</body></html>",
+  ].join("");
+}
+
+const HTML_V1 = htmlDoc("Dashboard v1", ".dash-v1 { color: red; }");
+const HTML_V2 = htmlDoc("Dashboard v2", ".dash-note { color: purple; }");
+
+const HTML_VERSION: Version = {
+  board_id: "b-html",
+  n: 2,
+  label: null,
+  note: null,
+  content: HTML_V2,
+  source_md: null,
+  anchors: [],
+  created_by: "agent-1",
+  created_at: "2026-09-15T11:00:00.000Z",
+};
+
+const HTML_COMMENTS: Comment[] = [
+  {
+    ...COMMENT_ROOT,
+    anchor: { type: "section", section_id: "s-header" },
+  },
+];
+
 mock.module("../api.ts", () => ({
   listBoards: async () => [MD_BOARD],
   getBoard: async (id: string) => {
@@ -157,18 +194,21 @@ mock.module("../api.ts", () => ({
   },
   getVersion: async (id: string, n: number) => {
     versionCalls.push([id, n]);
+    if (id === "b-html") {
+      return { ...HTML_VERSION, n, content: n === 1 ? HTML_V1 : HTML_V2 };
+    }
     return MD_VERSION;
   },
-  getOriginUrl: async () => ORIGIN,
   exchange: async (token: string) => {
     exchangeCalls.push(token);
     return `session-for-${token}`;
   },
   getComments: async (boardId: string) => {
     getCommentsCalls.push(boardId);
+    const comments = boardId === "b-html" ? HTML_COMMENTS : commentFixture;
     return {
-      comments: commentFixture,
-      last_seq: commentFixture.at(-1)?.seq ?? 0,
+      comments,
+      last_seq: comments.at(-1)?.seq ?? 0,
     };
   },
   createComment: async (boardId: string, input: CreateCommentInput) => {
@@ -260,18 +300,36 @@ describe("BoardView", () => {
     ]);
   });
 
-  test("html board renders the sandboxed origin iframe with the exact locked attribute set", async () => {
+  test("html board renders into .board-content — no iframe anywhere (D18)", async () => {
     const container = render(<BoardView id="b-html" />);
     await act(async () => {});
-    const frame = container.querySelector("iframe.board-frame");
-    expect(frame).not.toBe(null);
-    // the embed shape is pinned byte-for-byte by docs/security.md — ONLY
-    // allow-scripts, never allow-same-origin or friends (invariant 2)
-    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame?.getAttribute("allow")).toBe("");
-    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(frame?.getAttribute("title")).toBe("Dashboard");
-    expect(frame?.getAttribute("src")).toBe(`${ORIGIN}/b/b-html/2`);
+    expect(container.querySelector("iframe")).toBe(null);
+    const content = container.querySelector("div.board-content");
+    expect(content).not.toBe(null);
+    // body children mounted, opt-in data-ba sections intact
+    const section = content?.querySelector('[data-ba="s-header"]');
+    expect(section?.getAttribute("data-ba-label")).toBe("Header");
+    expect(section?.textContent).toBe("Dashboard v2");
+    // head styles land in the container (board templates keep CSS in <head>)
+    expect(content?.querySelector("style")?.textContent).toContain(
+      ".dash-note",
+    );
+    // scripts re-created: external keeps its src + ordered execution,
+    // inline keeps its text (innerHTML alone would never run them)
+    const scripts = [...(content?.querySelectorAll("script") ?? [])];
+    expect(scripts).toHaveLength(2);
+    expect(scripts[0].getAttribute("src")).toBe("/libs/chart-4.4.9.umd.min.js");
+    expect(scripts[0].async).toBe(false);
+    expect(scripts[1].getAttribute("src")).toBe(null);
+    expect(scripts[1].text).toContain("__dashMounted");
+  });
+
+  test("html board inline scripts actually run in the host DOM (D18)", async () => {
+    render(<BoardView id="b-html" />);
+    await act(async () => {});
+    expect(
+      (window as unknown as { __dashMounted?: boolean }).__dashMounted,
+    ).toBe(true);
   });
 
   test("markdown boards render no iframe", async () => {
@@ -281,41 +339,60 @@ describe("BoardView", () => {
     expect(container.querySelector("div.board-content")).not.toBe(null);
   });
 
-  test("switching versions recomputes the iframe src", async () => {
+  test("switching versions remounts the html document in place", async () => {
     const container = render(<BoardView id="b-html" />);
     await act(async () => {});
-    expect(
-      container.querySelector("iframe.board-frame")?.getAttribute("src"),
-    ).toBe(`${ORIGIN}/b/b-html/2`);
+    expect(container.querySelector("div.board-content")?.textContent).toContain(
+      "Dashboard v2",
+    );
     const pill = container.querySelector(
       "nav.version-switcher button.pill",
     ) as HTMLElement;
     await act(async () => {
       pill.click();
     });
+    expect(container.querySelector("div.board-content")?.textContent).toContain(
+      "Dashboard v1",
+    );
     expect(
-      container.querySelector("iframe.board-frame")?.getAttribute("src"),
-    ).toBe(`${ORIGIN}/b/b-html/1`);
+      container.querySelectorAll("div.board-content section"),
+    ).toHaveLength(1);
   });
 
-  test("highlighting an anchor on an html board aims the iframe fragment", async () => {
+  test("highlighting an html-board anchor outlines the section in the host DOM", async () => {
     const container = render(<BoardView id="b-html" />);
     await act(async () => {});
-    // second thread chip is the section anchor (section b1) — cm1 is text
-    const chips = container.querySelectorAll("button.anchor-chip.clickable");
+    const chip = container.querySelector(
+      "button.anchor-chip.clickable",
+    ) as HTMLElement;
     await act(async () => {
-      (chips[1] as HTMLElement).click();
+      chip.click();
     });
     expect(
-      container.querySelector("iframe.board-frame")?.getAttribute("src"),
-    ).toBe(`${ORIGIN}/b/b-html/2#b1`);
-    // a text anchor aims at its section fragment (best in-frame target)
+      container
+        .querySelector('[data-ba="s-header"]')
+        ?.classList.contains("anchor-target"),
+    ).toBe(true);
+  });
+
+  test("hover affordance works on html boards (the host DOM is the board)", async () => {
+    const container = render(<BoardView id="b-html" />);
+    await act(async () => {});
+    const section = container.querySelector(
+      '[data-ba="s-header"]',
+    ) as HTMLElement;
     await act(async () => {
-      (chips[0] as HTMLElement).click();
+      section.dispatchEvent(
+        new window.MouseEvent("mouseover", { bubbles: true }),
+      );
     });
-    expect(
-      container.querySelector("iframe.board-frame")?.getAttribute("src"),
-    ).toBe(`${ORIGIN}/b/b-html/2#b2`);
+    const button = container.querySelector("button.floating-comment");
+    expect(button?.textContent).toBe("Comment on section");
+    await act(async () => {
+      (button as HTMLElement).click();
+    });
+    expect(container.querySelector("div.composer")).not.toBe(null);
+    expect(container.innerHTML).toContain("on section s-header");
   });
 
   test("selection affordance survives the pointer crossing sections and opens the composer", async () => {
@@ -607,43 +684,7 @@ describe("CommentSidebar", () => {
     expect(container.innerHTML).toContain("✓ resolved");
   });
 
-  test("section picker: html-board section options open an anchored composer", async () => {
-    const container = render(
-      <CommentSidebar
-        boardId="bhtml"
-        boardStatus="open"
-        versionN={1}
-        refreshKey={0}
-        pendingAnchor={null}
-        sectionOptions={[
-          { id: "s-header", label: "Header" },
-          { id: "s-form", label: "Choices form" },
-        ]}
-        onPendingAnchorConsumed={() => {}}
-        onHighlight={() => {}}
-        onSwitchVersion={() => {}}
-      />,
-    );
-    await act(async () => {});
-    const open = [...container.querySelectorAll("button.pill")].find(
-      (button) => button.textContent === "+ section",
-    ) as HTMLElement;
-    await act(async () => {
-      open.click();
-    });
-    const option = [
-      ...container.querySelectorAll("button.section-option"),
-    ].find((button) => button.textContent === "Choices form") as HTMLElement;
-    await act(async () => {
-      option.click();
-    });
-    expect(container.innerHTML).toContain("on section s-form");
-    expect(container.querySelector("textarea")).not.toBe(null);
-    // picker folds away once a section is chosen
-    expect(container.querySelectorAll("button.section-option")).toHaveLength(0);
-  });
-
-  test("no section picker without section options (markdown affordances cover it)", async () => {
+  test("no section picker anywhere (removed by D18 — host affordances cover every board)", async () => {
     const container = render(
       <CommentSidebar
         boardId="b1"
@@ -658,6 +699,7 @@ describe("CommentSidebar", () => {
     );
     await act(async () => {});
     expect(container.innerHTML).not.toContain("+ section");
+    expect(container.querySelectorAll("button.section-option")).toHaveLength(0);
   });
 
   test("pendingAnchor opens the composer with the anchor chip and quote", async () => {

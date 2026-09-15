@@ -208,7 +208,7 @@ export function listComments(
   return rows.map(mapCommentRow);
 }
 
-export interface ReplyInput {
+interface ReplyInput {
   body: string;
   actor: string;
 }

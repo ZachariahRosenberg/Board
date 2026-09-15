@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
-export class ConfigError extends Error {
+class ConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ConfigError";
@@ -12,7 +12,6 @@ export interface Config {
   dataDir: string;
   host: string;
   port: number;
-  originPort: number;
   bind: string[];
 }
 
@@ -22,7 +21,6 @@ const DEFAULT_DATA_DIR = "~/.board";
 // Loopback-only bind is invariant 1 (docs/security.md); BOARD_HOST/BOARD_BIND are the explicit, documented opt-outs.
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 7800;
-const DEFAULT_ORIGIN_PORT = 7801;
 const DEFAULT_BIND = ["127.0.0.1"];
 const MAX_PORT = 65535;
 const HOSTNAME_FORBIDDEN = /[\s/]/;
@@ -96,17 +94,10 @@ function expandDataDir(raw: string): string {
 
 export function makeConfig(env: Env): Config {
   const port = parsePort(env, "BOARD_PORT", DEFAULT_PORT);
-  const originPort = parsePort(env, "BOARD_ORIGIN_PORT", DEFAULT_ORIGIN_PORT);
-  if (port !== 0 && originPort !== 0 && port === originPort) {
-    throw new ConfigError(
-      `BOARD_PORT and BOARD_ORIGIN_PORT must differ, both are ${port}`,
-    );
-  }
   return {
     dataDir: expandDataDir(readString(env, "BOARD_DATA_DIR", DEFAULT_DATA_DIR)),
     host: parseHostname(env, "BOARD_HOST", DEFAULT_HOST),
     port,
-    originPort,
     bind: parseBindList(env),
   };
 }

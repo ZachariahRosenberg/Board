@@ -6,7 +6,6 @@ export function runServe(): void {
   const daemon = startDaemon(config);
 
   console.log(`board: host app listening on ${daemon.hostUrl}`);
-  console.log(`board: board origin listening on ${daemon.originUrl}`);
 
   let shuttingDown = false;
   function shutdown() {

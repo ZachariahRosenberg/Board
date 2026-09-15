@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { resolveRepoRoot } from "../src/daemon.ts";
 import { rawRequest, startTestServer, type TestServer } from "./helpers.ts";
 
 let current: TestServer | undefined;
@@ -17,6 +20,17 @@ async function errorCode(res: Response): Promise<string> {
   const body = (await res.json()) as { error: { code: string } };
   return body.error.code;
 }
+
+// The exact host CSP pinned by daemon.ts hostSecurityHeaders (D18): agent
+// board scripts run in the app origin, so script-src allows 'unsafe-inline';
+// connect-src 'self' stays the exfil kill-switch; form-action 'self' keeps
+// boards from form-navigating the app away; nothing frames anymore.
+const HOST_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'";
+
+// Vendored file pinned in server/libs — the exact name is the upgrade
+// contract: a lib upgrade adds a new file, never rewrites this one.
+const CHART_FILE = "chart-4.4.9.umd.min.js";
 
 describe("host server (api)", () => {
   test("GET /api/health returns 200 {ok:true}", async () => {
@@ -40,17 +54,59 @@ describe("host server (api)", () => {
   });
 });
 
-describe("GET /api/origin", () => {
-  test("returns the daemon's live board-origin URL, unauthenticated", async () => {
+describe("GET /api/origin (removed by D18)", () => {
+  test("the endpoint is gone — a plain 404", async () => {
+    const res = await server().api.get("/api/origin");
+    expect(res.status).toBe(404);
+    expect(await errorCode(res)).toBe("not_found");
+  });
+});
+
+describe("host server: GET /libs/<file> (D18)", () => {
+  test("serves the vendored chart.js build with immutable cache and host headers", async () => {
     const s = server();
-    const res = await s.api.get("/api/origin");
+    const res = await s.api.get(`/libs/${CHART_FILE}`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("application/json");
-    expect(await res.json()).toEqual({ url: s.originUrl });
+    expect(res.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+    expect(res.headers.get("content-security-policy")).toBe(HOST_CSP);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    const vendored = readFileSync(
+      join(resolveRepoRoot(), "server", "libs", CHART_FILE),
+    );
+    expect(await res.text()).toBe(vendored.toString());
   });
 
-  test("wrong method returns 405 with an Allow header", async () => {
-    const res = await server().api.post("/api/origin", {});
+  test("unknown lib files are a 404", async () => {
+    const res = await server().api.get("/libs/nope.js");
+    expect(res.status).toBe(404);
+    expect(await errorCode(res)).toBe("not_found");
+  });
+
+  test("traversal out of the libs dir is rejected", async () => {
+    for (const path of [
+      "/libs/%2e%2e/%2e%2e/package.json",
+      "/libs/..%2f..%2fpackage.json",
+      `/libs/${CHART_FILE}%2f%2e%2e`,
+    ]) {
+      const res = await server().api.get(path);
+      expect(res.status).toBe(404);
+      expect(await errorCode(res)).toBe("not_found");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+
+  test("subdirectory-shaped paths are a 404 (flat dir)", async () => {
+    const res = await server().api.get(`/libs/sub/${CHART_FILE}`);
+    expect(res.status).toBe(404);
+  });
+
+  test("POST is a 405", async () => {
+    const res = await server().api.post(`/libs/${CHART_FILE}`, {});
     expect(res.status).toBe(405);
     expect(await errorCode(res)).toBe("method_not_allowed");
     expect(res.headers.get("allow")).toBe("GET");
@@ -58,59 +114,27 @@ describe("GET /api/origin", () => {
 });
 
 describe("binding", () => {
-  test("both servers bind 127.0.0.1 on distinct ephemeral ports and answer", async () => {
+  test("the daemon is a single server on 127.0.0.1 (D18: the board origin is gone)", async () => {
     const s = server();
     const host = new URL(s.hostUrl);
-    const origin = new URL(s.originUrl);
     expect(host.hostname).toBe("127.0.0.1");
-    expect(origin.hostname).toBe("127.0.0.1");
     expect(Number(host.port)).toBeGreaterThan(0);
-    expect(Number(origin.port)).toBeGreaterThan(0);
-    expect(host.port).not.toBe(origin.port);
     expect((await s.api.get("/api/health")).status).toBe(200);
-    expect((await s.origin.get("/b/some-board/1")).status).toBe(404);
-  });
-});
-
-describe("board origin security headers", () => {
-  test("every response carries the exact header set with derived frame-ancestors", async () => {
-    const s = server();
-    for (const path of ["/", "/b/abc/1", "/libs/mermaid.js", "/assets/img"]) {
-      const res = await s.origin.get(path);
-      expect(res.status).toBe(404);
-      expect(res.headers.get("content-security-policy")).toBe(
-        `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors ${s.hostUrl}`,
-      );
-      expect(res.headers.get("permissions-policy")).toBe(
-        "geolocation=(), camera=(), microphone=(), clipboard-read=(), clipboard-write=(), fullscreen=(), payment=(), usb=(), bluetooth=()",
-      );
-      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(res.headers.get("referrer-policy")).toBe("no-referrer");
-    }
   });
 });
 
 describe("request hardening", () => {
-  test("Host: evil.com is rejected with 421 on both servers (raw HTTP and fetch)", async () => {
+  test("Host: evil.com is rejected with 421 (raw HTTP and fetch)", async () => {
     const s = server();
     const hostPort = Number(new URL(s.hostUrl).port);
-    const originPort = Number(new URL(s.originUrl).port);
     const apiRaw = await rawRequest(
       hostPort,
       "GET /api/health HTTP/1.1\r\nHost: evil.com\r\nConnection: close\r\n",
     );
     expect(apiRaw.status).toBe(421);
-    const originRaw = await rawRequest(
-      originPort,
-      "GET /b/x HTTP/1.1\r\nHost: evil.com\r\nConnection: close\r\n",
-    );
-    expect(originRaw.status).toBe(421);
     expect(
       (await s.api.get("/api/health", { headers: { host: "evil.com" } }))
         .status,
-    ).toBe(421);
-    expect(
-      (await s.origin.get("/b/x", { headers: { host: "evil.com" } })).status,
     ).toBe(421);
   });
 
@@ -159,7 +183,6 @@ describe("no CORS", () => {
     const responses = [
       await s.api.get("/api/health"),
       await s.api.get("/api/nope"),
-      await s.origin.get("/b/x"),
     ];
     for (const res of responses) {
       const names: string[] = [];

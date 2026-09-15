@@ -233,17 +233,6 @@ body {
   line-height: 1.65;
 }
 
-/* html boards render as sandboxed origin iframes (docs/security.md "Sandbox
-   architecture") — same frame aesthetic as .board-content */
-.board-frame {
-  display: block;
-  width: 100%;
-  min-height: 60vh;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg);
-}
-
 /* board documents read as documents: serif prose (Source Serif 4), opencode's
    markdown color mapping for headings/links/code/quotes, Fira Code for code */
 .board-content h1,
@@ -537,39 +526,6 @@ body {
   outline: 2px solid var(--primary);
   outline-offset: 3px;
   border-radius: 4px;
-}
-
-/* html boards: the "+ section" picker (in-frame hovers are invisible to the host) */
-.section-picker {
-  margin: 10px 12px;
-  padding: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-element);
-}
-
-.section-picker .small {
-  margin-bottom: 6px;
-  color: var(--fg-muted);
-}
-
-.section-option {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 10px;
-  margin: 2px 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-}
-
-.section-option:hover {
-  background: var(--bg-element);
-  color: var(--primary);
 }
 
 /* a text anchor whose quote no longer exists in the current version —

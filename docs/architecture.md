@@ -4,16 +4,15 @@ System design for v1. Scope and milestones live in [plan.md](plan.md); the threa
 
 ## Process model
 
-One process — `boardd` — listens on two loopback ports. Different ports are different origins, which is the foundation of the sandbox model:
+One process — `boardd` — listens on one loopback port:
 
-| Port | Origin role | Serves |
-|---|---|---|
-| `127.0.0.1:7800` | **host** (trusted chrome) | React SPA, `/api/*` REST, `/mcp` (Streamable HTTP), `/api/stream` SSE |
-| `127.0.0.1:7801` | **board origin** (untrusted content) | `/b/<id>/<version>` HTML documents, `/libs/*` vendored libs, `/assets/<id>` images |
+| Port | Serves |
+|---|---|
+| `127.0.0.1:7800` | React SPA, `/api/*` REST, `/api/stream` SSE, `/mcp` (Streamable HTTP), `/libs/*` vendored pinned libraries |
 
-The host app never renders agent HTML directly. HTML boards are embedded via `<iframe sandbox="allow-scripts">` pointing at the board origin, so even a malicious board is origin-isolated from the comment store, tokens, and host DOM. Boards are served as real documents from their own origin — never via `srcdoc` or `blob:` URLs on the host origin (that would leave the sandbox as the only barrier).
+Every board — markdown and agent HTML — renders **in the host chrome** (D18): the two-origin iframe sandbox was built for M4, dogfooded one round, and removed by the owner's decision the same day. Agent HTML mounts into the app's DOM with scripts running; the host CSP (`connect-src 'self'`, `form-action 'self'`) is the guard. The trade and its accepted risks are recorded in [security.md](security.md) and [decisions.md](decisions.md) D18.
 
-Ports are configurable (`BOARD_PORT`, `BOARD_ORIGIN_PORT`); default bind is `127.0.0.1` only, with an explicit, documented bind-list option for Docker-hosted agents.
+Ports are configurable (`BOARD_PORT`); default bind is `127.0.0.1` only, with an explicit, documented bind-list option for Docker-hosted agents.
 
 ## On disk
 
@@ -30,12 +29,12 @@ Ports are configurable (`BOARD_PORT`, `BOARD_ORIGIN_PORT`); default bind is `127
 
 SQLite is the queryable source of truth; the bundle layout exists so a board is one portable, greppable unit. Export/import are direct zips of `boards/<id>/`. All writes flow through the daemon's API — agents never touch these files.
 
-## One document model, two display modes
+## One document model
 
-Every version is stored and served as **one HTML document**. `format` (markdown | html) is input convenience:
+Every version is stored as **one HTML document** rendered in the host chrome. `format` (markdown | html) is input convenience:
 
-- **markdown** → the daemon renders at publish (marked GFM → DOMPurify → mermaid strict → katex → code highlighting), auto-injecting `data-ba` ids on every top-level block, heading, and table row. The derived document is script-free by construction (DOMPurify strips scripts), so the UI renders it **in the host chrome** — enabling v1 text-highlight, section, and row anchoring right next to the comment sidebar. The markdown source is kept alongside the derived HTML.
-- **html** → served verbatim from the board origin inside the sandboxed iframe; annotatable sections come from opt-in `data-ba` markers extracted at publish. In-iframe text/element anchoring arrives with the v1.1 bridge (nonce-handshaked postMessage overlay, plannotator-style).
+- **markdown** → the daemon renders at publish (marked GFM → DOMPurify → mermaid strict → katex → code highlighting), auto-injecting `data-ba` ids on every top-level block, heading, and table row. The derived document is script-free by construction (DOMPurify strips scripts). The markdown source is kept alongside the derived HTML.
+- **html** → stored as an id-injected derived document (auto `data-ba` on unlabeled top-level blocks and rows; opt-in markers and labels kept, D18: no sanitization) and mounted into the app's DOM with head styles carried over and scripts re-created so they actually execute (`innerHTML` never runs script elements). Full hover/selection anchoring applies to every board.
 
 ## Request flows
 

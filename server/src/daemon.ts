@@ -19,7 +19,6 @@ import { boardRoutes } from "./routes/boards.ts";
 import { commentRoutes } from "./routes/comments.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { healthRoute } from "./routes/health.ts";
-import { originRoute, originUrlRef } from "./routes/origin.ts";
 import {
   matchPath,
   matchRoute,
@@ -33,23 +32,18 @@ import {
   BoardEnded,
   BoardNotFound,
   ContentTooLarge,
-  getBoard,
-  getVersion,
   VersionConflict,
   VersionNotFound,
 } from "./store.ts";
-import { asNonNegativeIntString } from "./validate.ts";
 
-export interface Daemon {
+interface Daemon {
   hostServer: Bun.Server<undefined>;
-  originServer: Bun.Server<undefined>;
   hostUrl: string;
-  originUrl: string;
   db: Database;
   stop(): Promise<void>;
 }
 
-export interface DaemonOptions {
+interface DaemonOptions {
   // Where resolveWebDist starts walking to find the repo root; the test seam
   // for pointing the daemon at a fixture web/dist.
   webRootHint?: string;
@@ -57,7 +51,6 @@ export interface DaemonOptions {
 
 const routes: Route[] = [
   healthRoute,
-  originRoute,
   ...sessionRoutes,
   ...boardRoutes,
   ...commentRoutes,
@@ -65,50 +58,21 @@ const routes: Route[] = [
   streamRoute,
 ];
 
-// Board-origin CSP allowlist from docs/security.md — never widen it (invariant 3); connect-src 'none' is the exfiltration kill switch. frame-ancestors is derived from the actual host origin at boot.
-const BOARD_CSP_DIRECTIVES = [
-  "default-src 'none'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "media-src 'self' data: blob:",
-  "connect-src 'none'",
-  "form-action 'none'",
-  "frame-src 'none'",
-  "object-src 'none'",
-  "base-uri 'none'",
-];
-
-const PERMISSIONS_POLICY =
-  "geolocation=(), camera=(), microphone=(), clipboard-read=(), clipboard-write=(), fullscreen=(), payment=(), usb=(), bluetooth=()";
-
-export function boardSecurityHeaders(
-  hostOrigin: string,
-): Record<string, string> {
-  return {
-    "content-security-policy": [
-      ...BOARD_CSP_DIRECTIVES,
-      `frame-ancestors ${hostOrigin}`,
-    ].join("; "),
-    "permissions-policy": PERMISSIONS_POLICY,
-    "x-content-type-options": "nosniff",
-    "referrer-policy": "no-referrer",
-  };
-}
-
-// Host-app CSP from docs/security.md, exact. The board-origin URL is derived
-// from the actual bound origin port at boot (mirroring how the board CSP
-// derives frame-ancestors), so the two origins always agree in dev and tests.
-export function hostSecurityHeaders(originUrl: string): Record<string, string> {
+// Host-app CSP, exact (D18). Agent board scripts run in the app's origin —
+// hence script-src 'unsafe-inline' — at the owner's explicit risk acceptance
+// (docs/decisions.md D18). What survives as the guard: connect-src 'self' is
+// the exfiltration kill-switch (never opens), form-action 'self' keeps boards
+// from form-navigating the app away, and frame-ancestors 'none' still
+// protects the app from being framed by anyone.
+export function hostSecurityHeaders(): Record<string, string> {
   return {
     "content-security-policy": [
       "default-src 'self'",
-      "script-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
-      `img-src 'self' data: ${originUrl}`,
+      "img-src 'self' data:",
       "connect-src 'self'",
-      `frame-src ${originUrl}`,
+      "form-action 'self'",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'none'",
@@ -358,7 +322,7 @@ async function handleApiRequest(
 
 // The MCP endpoint: same request hardening as /api (DNS-rebinding, CSRF,
 // JSON-only writes), then agent-only bearer auth, then the stateless
-// JSON-mode MCP transport (server/src/mcp.ts).
+// JSON-mode MCP transport (D16, server/src/mcp.ts).
 async function handleMcpRequest(
   req: Request,
   config: Config,
@@ -383,14 +347,17 @@ function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
 }
 
-// The host server is two servers in one: /api/* through the route table,
-// everything else the built SPA — with the same request hardening.
+// The host server is three things in one: /api/* through the route table,
+// /libs/* (vendored pinned libs — D18: board scripts run in the app origin
+// and load them root-relative), and everything else the built SPA — all with
+// the same request hardening.
 async function handleHostRequest(
   req: Request,
   config: Config,
   db: Database,
   dataDir: string,
   webDist: string,
+  libsDir: string,
   headers: Record<string, string>,
 ): Promise<Response> {
   const { pathname } = new URL(req.url);
@@ -408,9 +375,11 @@ async function handleHostRequest(
         405,
         "method_not_allowed",
         `${req.method} is not allowed for static paths`,
-        headers,
-        { allow: "GET" },
+        { ...headers, allow: "GET" },
       );
+    }
+    if (pathname.startsWith("/libs/")) {
+      return serveLib(libsDir, pathname, headers);
     }
     return serveWebPath(pathname, webDist, headers);
   } catch (err) {
@@ -418,58 +387,15 @@ async function handleHostRequest(
   }
 }
 
-// Versions are immutable by design (restoring republishes as a NEW version —
-// never a rewrite), so version documents cache forever.
+// Version documents are immutable by design (restoring republishes as a NEW
+// version — never a rewrite), and so are the vendored libs (filenames carry
+// the lib version — the upgrade contract adds a file, never rewrites one).
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
-// Board ids are [A-Za-z0-9]{10} (server/src/ids.ts) — anything else cannot
-// exist and short-circuits to not-found without a db round-trip.
-const BOARD_ID_PATTERN = /^[A-Za-z0-9]{10}$/;
-
-// GET /b/:id/:n serves the stored version document verbatim, no auth: the
-// origin serves public-to-the-browser documents — loopback binding plus the
-// opaque-origin iframe sandbox is the boundary (docs/security.md). Content
-// comes from the db, the source of truth: the bundle file at
-// <dataDir>/boards/<id>/versions/<n>.html is the portable copy, and store.ts
-// already treats a stray file as harmless while a missing db row is not.
-function serveBoardVersion(
-  db: Database,
-  boardId: string,
-  rawN: string,
-  headers: Record<string, string>,
-): Response {
-  if (!BOARD_ID_PATTERN.test(boardId)) {
-    throw new BoardNotFound(boardId);
-  }
-  // same boundary parse as the host's GET /api/boards/:id/versions/:n
-  const n = asNonNegativeIntString(rawN, "n");
-  if (n === undefined) {
-    throw new HttpError(
-      400,
-      "invalid_request",
-      "n must be a non-negative integer",
-    );
-  }
-  if (getBoard(db, boardId) === null) {
-    throw new BoardNotFound(boardId);
-  }
-  const version = getVersion(db, boardId, n);
-  if (version === null) {
-    throw new VersionNotFound(boardId, n);
-  }
-  return new Response(version.content, {
-    headers: {
-      ...headers,
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": IMMUTABLE_CACHE,
-    },
-  });
-}
-
 // GET /libs/<file> serves the vendored, version-stamped libraries from
-// <repo>/server/origin-libs: the board CSP's script-src 'self' means boards
-// load pinned libs from the origin itself (docs/security.md). Filenames carry
-// the lib version, so an upgrade adds a file and immutable caching can never
+// <repo>/server/libs — D18: board scripts run in the app origin and load
+// them root-relative, so the host serves them itself. Filenames carry the
+// lib version, so an upgrade adds a file and immutable caching can never
 // strand an old board.
 function serveLib(
   libsDir: string,
@@ -492,46 +418,6 @@ function serveLib(
   });
 }
 
-// The board-origin server: sandbox documents (/b/:id/:n) and their pinned
-// vendored libs (/libs/<file>). Every response carries the locked header set —
-// including errors (docs/security.md "Sandbox architecture").
-async function handleBoardOriginRequest(
-  req: Request,
-  config: Config,
-  db: Database,
-  libsDir: string,
-  securityHeaders: Record<string, string>,
-): Promise<Response> {
-  try {
-    assertAllowedHost(req, config);
-    rejectCrossSite(req);
-    const { pathname } = new URL(req.url);
-    if (req.method !== "GET") {
-      return jsonError(
-        405,
-        "method_not_allowed",
-        `${req.method} is not allowed for ${pathname}`,
-        { ...securityHeaders, allow: "GET" },
-      );
-    }
-    if (pathname.startsWith("/libs/")) {
-      return serveLib(libsDir, pathname, securityHeaders);
-    }
-    const boardMatch = /^\/b\/([^/]+)\/([^/]+)$/.exec(pathname);
-    if (boardMatch !== null) {
-      return serveBoardVersion(
-        db,
-        boardMatch[1] ?? "",
-        boardMatch[2] ?? "",
-        securityHeaders,
-      );
-    }
-    return jsonError(404, "not_found", "not found", securityHeaders);
-  } catch (err) {
-    return errorResponse(err, securityHeaders);
-  }
-}
-
 function boundPort(server: Bun.Server<undefined>): number {
   const port = server.port;
   if (port === undefined) {
@@ -542,13 +428,13 @@ function boundPort(server: Bun.Server<undefined>): number {
 
 export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
   const db = openDb(config.dataDir);
-  // Placeholder until the origin server binds below: the host CSP embeds the
-  // real origin port. startDaemon is fully synchronous, so no request can be
-  // served before the assignment.
-  const webHeaders: { headers: Record<string, string> } = { headers: {} };
+  // Vendored pinned libs for board scripts (D18: they run in the app origin
+  // and load /libs/* root-relative). Missing dir just 404s at serve time.
+  const libsDir = join(resolveRepoRoot(opts.webRootHint), "server", "libs");
   let hostServer: Bun.Server<undefined>;
   try {
     const webDist = resolveWebDist(opts.webRootHint);
+    const webHeaders = hostSecurityHeaders();
     hostServer = Bun.serve({
       hostname: config.host,
       port: config.port,
@@ -559,49 +445,20 @@ export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
           db,
           config.dataDir,
           webDist,
-          webHeaders.headers,
+          libsDir,
+          webHeaders,
         ),
     });
   } catch (err) {
     db.close();
     throw err;
   }
-  let originServer: Bun.Server<undefined>;
-  try {
-    const securityHeaders = boardSecurityHeaders(
-      originUrlFor(config.host, boundPort(hostServer)),
-    );
-    // Vendored pinned libs for sandboxed boards (docs/security.md: script-src
-    // 'self' on the board origin). Missing dir just 404s at serve time.
-    const libsDir = join(
-      resolveRepoRoot(opts.webRootHint),
-      "server",
-      "origin-libs",
-    );
-    originServer = Bun.serve({
-      hostname: config.host,
-      port: config.originPort,
-      fetch: (req) =>
-        handleBoardOriginRequest(req, config, db, libsDir, securityHeaders),
-    });
-  } catch (err) {
-    hostServer.stop(true);
-    db.close();
-    throw err;
-  }
-  const originUrl = originUrlFor(config.host, boundPort(originServer));
-  webHeaders.headers = hostSecurityHeaders(originUrl);
-  // feeds GET /api/origin — the SPA's runtime discovery of this URL
-  originUrlRef.url = originUrl;
   return {
     hostServer,
-    originServer,
     hostUrl: originUrlFor(config.host, boundPort(hostServer)),
-    originUrl,
     db,
     stop: async () => {
       await hostServer.stop(true);
-      await originServer.stop(true);
       db.close();
     },
   };

@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BoardEvent, EventType } from "./domain.ts";
 
-export interface EventInput {
+interface EventInput {
   actor: string;
   type: EventType;
   boardId?: string;
@@ -19,7 +19,7 @@ interface EventRow {
   payload: string;
 }
 
-export const DEFAULT_EVENT_LIMIT = 200;
+const DEFAULT_EVENT_LIMIT = 200;
 
 export function appendEventDb(db: Database, ev: EventInput): BoardEvent {
   const row = db
@@ -85,7 +85,7 @@ function emit(event: BoardEvent): void {
   });
 }
 
-export interface GetEventsOptions {
+interface GetEventsOptions {
   since?: number;
   boardId?: string;
   limit?: number;

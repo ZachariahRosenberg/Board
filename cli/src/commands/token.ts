@@ -12,7 +12,7 @@ export interface CommandIo {
   stderr(text: string): void;
 }
 
-export interface TokenCommandInput {
+interface TokenCommandInput {
   db: Database;
   argv: string[];
   io: CommandIo;

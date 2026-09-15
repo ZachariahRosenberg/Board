@@ -344,7 +344,7 @@ describe("board and version queries", () => {
     expect(newer?.tags).toEqual([]);
   });
 
-  test("html format content is stored verbatim with extracted anchors", async () => {
+  test("html format stores the id-injected document with extracted anchors (D18)", async () => {
     const board = createBoard(db, dataDir, {
       title: "HTML board",
       format: "html",
@@ -356,7 +356,10 @@ describe("board and version queries", () => {
       expected_version: 0,
       actor: "human",
     });
-    expect(version.content).toBe(HTML_DOC);
+    // D18: the derived-document model applies to html too — the stored
+    // content is the publish-time injected document, not the raw input
+    expect(version.content).not.toBe(HTML_DOC);
+    expect(version.content).toContain('data-ba="s1" data-ba-label="Panel"');
     expect(version.source_md).toBeNull();
     expect(version.anchors).toEqual([
       { id: "s1", kind: "block", label: "Panel" },
@@ -366,10 +369,40 @@ describe("board and version queries", () => {
         join(dataDir, "boards", board.id, "versions", "1.html"),
         "utf8",
       ),
-    ).toBe(HTML_DOC);
+    ).toBe(version.content);
     expect(
       existsSync(join(dataDir, "boards", board.id, "versions", "1.md")),
     ).toBe(false);
+  });
+
+  test("html publish auto-injects ids on unlabeled top-level blocks and table rows", async () => {
+    const board = createBoard(db, dataDir, {
+      title: "HTML inject",
+      format: "html",
+      actor: "human",
+    });
+    const version = await publishVersion(db, dataDir, board.id, {
+      format: "html",
+      content: [
+        "<!doctype html><html><body>",
+        "<p>intro</p>",
+        '<section data-ba="s-chart" data-ba-label="Chart">chart</section>',
+        "<table><tr><td>a</td></tr></table>",
+        "</body></html>",
+      ].join(""),
+      expected_version: 0,
+      actor: "human",
+    });
+    expect(version.content).toContain('<p data-ba="b1">intro</p>');
+    expect(version.content).toContain('data-ba="s-chart"');
+    expect(version.content).toContain('<table data-ba="b3">');
+    expect(version.content).toContain('<tr data-ba="b3r1">');
+    expect(version.anchors).toEqual([
+      { id: "b1", kind: "block" },
+      { id: "s-chart", kind: "block", label: "Chart" },
+      { id: "b3", kind: "block" },
+      { id: "b3r1", kind: "row" },
+    ]);
   });
 
   test("listVersions returns metadata only, ordered by n, anchors included", async () => {

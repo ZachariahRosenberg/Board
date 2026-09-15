@@ -151,7 +151,7 @@ const MATH_RE = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
 const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 const CODE_HIGHLIGHT_THEME = "github-light";
 
-export interface RenderedDocument {
+interface RenderedDocument {
   html: string;
   anchors: ExtractedAnchor[];
 }
@@ -166,24 +166,28 @@ export async function renderMarkdownDocument(
   convertMermaidBlocks(doc, body);
   renderMath(doc, body);
   await highlightCodeBlocks(doc, body);
-  const anchors = injectAnchors(body);
-  return { html: wrapDocument(body.innerHTML), anchors };
+  injectAnchorIds(body, false);
+  return {
+    html: wrapDocument(body.innerHTML),
+    anchors: collectMarkdownAnchors(body),
+  };
 }
 
-// HTML-format documents are stored verbatim (the sandbox isolates them —
-// docs/plan.md "one document model"); anchors come from opt-in data-ba markers.
-export function extractHtmlAnchors(html: string): ExtractedAnchor[] {
+// D18: html boards are derived documents too. The publish pipeline parses the
+// full document, injects data-ba ids on unlabeled top-level blocks and table
+// rows (opt-in data-ba markers are kept), and the INJECTED document is the
+// stored version content. Deliberately NO DOMPurify here: agent scripts
+// running in the host chrome is the explicit D18 decision — the owner's
+// accepted risk, recorded in docs/decisions.md. Host-side exposure is bounded
+// by the host CSP (daemon.ts), connect-src 'self' being the exfil kill-switch.
+export function renderHtmlDocument(html: string): RenderedDocument {
   const doc = new window.DOMParser().parseFromString(html, "text/html");
   const body = doc.body as unknown as Element;
-  const anchors: ExtractedAnchor[] = [];
-  for (const el of [...body.querySelectorAll("[data-ba]")]) {
-    anchors.push({
-      id: el.getAttribute("data-ba") ?? "",
-      kind: "block",
-      label: el.getAttribute("data-ba-label") || undefined,
-    });
-  }
-  return anchors;
+  injectAnchorIds(body, true);
+  return {
+    html: `<!doctype html>${doc.documentElement.outerHTML}`,
+    anchors: collectHtmlAnchors(body),
+  };
 }
 
 function parseFragment(doc: Document, html: string): Element {
@@ -317,10 +321,30 @@ async function highlightCodeBlocks(
 }
 
 // data-ba scheme: b<i> for each top-level element (1-based, elements only);
-// table rows get b<i>r<j> (1-based across the whole table, header included).
-// Deterministic: same input, same ids.
-function injectAnchors(body: Element): ExtractedAnchor[] {
-  const anchors: ExtractedAnchor[] = [];
+// table rows get <table-id>r<j> (1-based across the whole table, header
+// included). Deterministic: same input, same ids. This is the ONE injector
+// shared by both formats: markdown passes keepExisting=false (sanitized input
+// arrives data-ba-free, every id allocated fresh, positional); html passes
+// keepExisting=true (D18) — opt-in data-ba markers are kept untouched and only
+// the gaps are filled, skipping ids already present anywhere in the document.
+function injectAnchorIds(body: Element, keepExisting: boolean): void {
+  const used = new Set<string>();
+  if (keepExisting) {
+    for (const el of [...body.querySelectorAll("[data-ba]")]) {
+      const id = el.getAttribute("data-ba") ?? "";
+      if (id !== "") {
+        used.add(id);
+      }
+    }
+  }
+  const allocate = (base: string): string => {
+    let id = base;
+    for (let n = 2; used.has(id); n++) {
+      id = `${base}-${n}`;
+    }
+    used.add(id);
+    return id;
+  };
   let i = 0;
   for (const child of [...body.childNodes]) {
     if (child.nodeType !== 1) {
@@ -328,22 +352,61 @@ function injectAnchors(body: Element): ExtractedAnchor[] {
     }
     const el = child as Element;
     i++;
-    const id = `b${i}`;
+    if (el.tagName === "SCRIPT") {
+      // scripts are invisible, unhighlightable content — they never get
+      // auto-injected ids (opt-in markers on them are still kept below);
+      // markdown cannot reach here (the sanitizer strips scripts)
+      continue;
+    }
+    const existing = keepExisting ? (el.getAttribute("data-ba") ?? "") : "";
+    const id = existing !== "" ? existing : allocate(`b${i}`);
     el.setAttribute("data-ba", id);
     if (el.tagName === "TABLE") {
-      anchors.push({ id, kind: "block" });
       let j = 0;
       for (const row of [...el.querySelectorAll("tr")]) {
         j++;
-        const rowId = `${id}r${j}`;
-        row.setAttribute("data-ba", rowId);
-        anchors.push({ id: rowId, kind: "row" });
+        const rowExisting = keepExisting
+          ? (row.getAttribute("data-ba") ?? "")
+          : "";
+        row.setAttribute(
+          "data-ba",
+          rowExisting !== "" ? rowExisting : allocate(`${id}r${j}`),
+        );
+      }
+    }
+  }
+}
+
+// Markdown anchor list: kinds are derived from the element (headings carry
+// their text as label — markdown has no label scheme of its own).
+function collectMarkdownAnchors(body: Element): ExtractedAnchor[] {
+  const anchors: ExtractedAnchor[] = [];
+  for (const el of [...body.children]) {
+    const id = el.getAttribute("data-ba") ?? "";
+    if (el.tagName === "TABLE") {
+      anchors.push({ id, kind: "block" });
+      for (const row of [...el.querySelectorAll("tr")]) {
+        anchors.push({ id: row.getAttribute("data-ba") ?? "", kind: "row" });
       }
     } else if (HEADING_TAGS.has(el.tagName)) {
       anchors.push({ id, kind: "heading", label: el.textContent ?? undefined });
     } else {
       anchors.push({ id, kind: "block" });
     }
+  }
+  return anchors;
+}
+
+// Html anchor list (over the injected document): every data-ba element in
+// document order, labels only from the opt-in data-ba-label attribute.
+function collectHtmlAnchors(body: Element): ExtractedAnchor[] {
+  const anchors: ExtractedAnchor[] = [];
+  for (const el of [...body.querySelectorAll("[data-ba]")]) {
+    anchors.push({
+      id: el.getAttribute("data-ba") ?? "",
+      kind: el.tagName === "TR" ? "row" : "block",
+      label: el.getAttribute("data-ba-label") || undefined,
+    });
   }
   return anchors;
 }

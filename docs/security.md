@@ -8,47 +8,27 @@ Threat model and required mitigations for v1. The invariants here are enforced i
 - **Untrusted**: every byte of agent-authored board content; all API input; everything arriving from a board iframe; tool/board output consumed by agents (prompt-injection surface).
 - **Assumed environment**: one local human — but their browser also visits the public internet, so remote websites attacking our localhost ports are in scope (CSRF, DNS rebinding, localhost port probing).
 
-## Sandbox architecture (board rendering)
+## Render trust model (D18 — full host-render)
 
-Board iframes:
+**Owner decision 2026-09-15 ([docs/decisions.md](decisions.md) D18):** agent HTML boards render in the host chrome, unsandboxed, with scripts running in the app's origin. The earlier two-origin iframe model was built, dogfooded one round, and removed the same day — the owner judged the interactivity cost higher than the risk.
 
-```html
-<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer" …>
-```
-
-**Only** `allow-scripts`. Never `allow-same-origin`, `allow-forms`, `allow-popups`, `allow-top-navigation`, `allow-modals`, or `allow-downloads`. Without `allow-same-origin` the frame gets an opaque origin: no storage, no cookies, no DOM access in either direction, and every board iframe is mutually isolated.
-
-Boards are served from a separate origin (`:7801`) as real documents — never `srcdoc`/`blob:` on the host origin. Board-origin responses carry:
+There is no board iframe, no second origin, and no sanitization of html-format boards. What stands between board script and the app is the host CSP:
 
 ```
-Content-Security-Policy:
-  default-src 'none';
-  script-src 'self' 'unsafe-inline';
-  style-src 'self' 'unsafe-inline';
-  img-src 'self' data: blob:;
-  font-src 'self' data:;
-  media-src 'self' data: blob:;
-  connect-src 'none';
-  form-action 'none';
-  frame-src 'none';
-  object-src 'none';
-  base-uri 'none';
-  frame-ancestors http://127.0.0.1:7800
-Permissions-Policy: geolocation=(), camera=(), microphone=(), clipboard-read=(), clipboard-write=(), fullscreen=(), payment=(), usb=(), bluetooth=()
+default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; connect-src 'self'; form-action 'self';
+frame-ancestors 'none'; object-src 'none'; base-uri 'none'
 ```
 
-`connect-src 'none'` is the exfiltration and localhost-port-probing kill switch — it never opens. `script-src 'self'` covers the vendored, pinned libraries served from the board origin; `'unsafe-inline'` is honest (boards are inline script by definition — the sandbox already assumes hostile scripts; CSP governs *where scripts come from and what they can reach*, not whether they run).
+- `connect-src 'self'` is the network-exfiltration kill-switch — board script cannot fetch, WebSocket, or beacon anywhere but the app itself. It never opens.
+- `form-action 'self'` — boards cannot form-navigate the app away to an external URL.
+- `frame-ancestors 'none'` — nobody frames the app.
+- `script-src 'self' 'unsafe-inline'` — the accepted cost of D18: board scripts run, from the app's own origin (`/libs/*`, pinned) or inline.
+- `default-src 'self'` — no audio, video, plugin, or worker reach beyond the app.
 
-Host app CSP:
+**Named, owner-accepted residual risks:** board script shares the page with the session token (localStorage) and the API — it can act as the human (write/resolve anything) and paint arbitrary UI over the app (phishing). Rationale: boards are published by the user's own agents, which already hold machine-level access. **Foreign content invalidates this rationale** — M6 import and any remote mode must re-examine quarantine before those paths ship.
 
-```
-default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-img-src 'self' data: http://127.0.0.1:7801; connect-src 'self';
-frame-src http://127.0.0.1:7801; frame-ancestors 'none';
-object-src 'none'; base-uri 'none'
-```
-
-If a board needs host capabilities (storage, open-link, clipboard), it goes through a nonce-handshaked, origin-checked, schema-validated postMessage RPC — never a CSP widening. (Lands with the v1.1 bridge; protocol is designed now.)
+Markdown boards are unaffected: they pass through DOMPurify at publish and are script-free by construction (invariant 5).
 
 ## API hardening
 
@@ -62,7 +42,8 @@ If a board needs host capabilities (storage, open-link, clipboard), it goes thro
 
 ## Content rules
 
-- Markdown rendered in the host chrome passes through DOMPurify, always; mermaid runs at `securityLevel: 'strict'`; katex through its standard pipeline.
+- Markdown rendered in the host chrome passes through DOMPurify, always; mermaid runs at `securityLevel: 'strict'`; katex through its standard pipeline. html-format boards are stored and rendered unsanitized per D18 — the CSP above is their only guard, by owner decision.
+- html publishes store an id-injected derived document (auto `data-ba` on unlabeled blocks/rows for anchoring); previously stored versions are never retro-injected.
 - Boards: 8 MB cap per document. Assets: 10 MB, mime allowlist, **magic-byte verification** — the `{path}` file-copy route can only ever ingest real images and must never become a file-read primitive; SVG is sanitized at ingest.
 - Agent tokens: random ≥128-bit, stored SHA-256, revocable, one per agent, never logged or committed. Human browser session: one-time `?token=` exchange via `board open`, stored in localStorage, sent as bearer.
 - Webhook deliveries are HMAC-signed with the subscriber's secret; the secret is stored hashed and shown once.
@@ -70,6 +51,6 @@ If a board needs host capabilities (storage, open-link, clipboard), it goes thro
 
 ## Residual risks (accepted)
 
-- A sandboxed frame can navigate *itself* away (CSP doesn't govern navigations); it can't read host data (opaque origin + `connect-src 'none'`), so there's nothing valuable to leak — detected and reset.
-- CPU DoS from a hostile board: the sandbox can't throttle; mitigations are size caps and the reload affordance.
-- Same-host different-port origins share a browser process (no site isolation between `:7800`/`:7801`); acceptable — the origin split still blocks data access.
+- Board script can read the session token, act as the human on the API, and repaint the app (D18, owner-accepted; rationale in the render trust model above). `connect-src 'self'` still blocks network exfiltration and localhost port probing.
+- CPU DoS from a hostile board: no in-page throttling; mitigations are the 8 MB cap and closing the tab.
+- Foreign content (M6 import, remote modes) is NOT covered by the D18 rationale — quarantine must be re-examined before those paths ship.

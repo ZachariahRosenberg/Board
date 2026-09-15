@@ -2,25 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import type { Anchor, Version } from "../../../server/src/domain.ts";
 import {
   anchorForElement,
-  anchorFragment,
   anchorFromSelection,
   highlightAnchor,
 } from "../anchor.ts";
 import {
   type BoardWithVersions,
   getBoard,
-  getOriginUrl,
   getVersion,
   streamUrl,
 } from "../api.ts";
+import { mountBoardDocument } from "../board-mount.ts";
 import { formatDate } from "../format.ts";
 import { BoardStream } from "../sse.ts";
 import { CommentSidebar } from "./CommentSidebar.tsx";
 
-// Markdown-derived content was sanitized server-side at publish (script-free
-// by construction) — injecting it here IS the sanctioned host-chrome display
-// mode (docs/architecture.md). html-format content is NEVER injected (M4
-// sandbox territory); the placeholder notice covers it.
+// Markdown content was sanitized server-side at publish (script-free by
+// construction) — injecting it here IS the sanctioned host-chrome display
+// mode (docs/architecture.md). html-format boards mount through
+// mountBoardDocument instead (D18: unsandboxed host render, scripts run).
 function boardBodyHtml(content: string): string {
   const doc = new DOMParser().parseFromString(content, "text/html");
   return doc.body.innerHTML;
@@ -41,9 +40,6 @@ export function BoardView({ id }: { id: string }) {
   const [affordance, setAffordance] = useState<Affordance | null>(null);
   const [pendingAnchor, setPendingAnchor] = useState<Anchor | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [originUrl, setOriginUrl] = useState<string | null>(null);
-  // html boards are aimed by URL fragment (anchor chip clicks) — see onHighlight
-  const [frameFragment, setFrameFragment] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hoverTargetRef = useRef<Element | null>(null);
   // The floating button pins the affordance while the pointer is on it —
@@ -61,7 +57,6 @@ export function BoardView({ id }: { id: string }) {
     setSelected(null);
     setVersion(null);
     setError(null);
-    setFrameFragment(null);
     getBoard(id)
       .then((loaded) => {
         if (!alive) {
@@ -132,23 +127,23 @@ export function BoardView({ id }: { id: string }) {
     };
   }, [version, data]);
 
-  // html boards render from the board origin — learn its URL once (config
-  // allows BOARD_ORIGIN_PORT to move it; markdown boards never need it).
+  // D18: html boards mount into the host DOM like markdown — the document is
+  // parsed, head styles and body children are injected, and scripts are
+  // re-created so they actually run (innerHTML would not execute them).
+  // Declared before the affordance effects so the content DOM exists when
+  // their listeners bind.
   useEffect(() => {
-    let alive = true;
-    getOriginUrl()
-      .then((url) => {
-        if (alive) {
-          setOriginUrl(url);
-        }
-      })
-      .catch(() => {
-        // the html branch surfaces this below; markdown boards don't care
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const root = containerRef.current;
+    if (
+      version === null ||
+      data === null ||
+      root === null ||
+      data.board.format !== "html"
+    ) {
+      return;
+    }
+    mountBoardDocument(version.content, root);
+  }, [version, data]);
 
   // Live updates (SSE): any event for this board refreshes comments; board
   // lifecycle events also refresh the board meta. Reconnect is EventSource's.
@@ -305,21 +300,6 @@ export function BoardView({ id }: { id: string }) {
     return <div className="status">loading…</div>;
   }
   const board = data.board;
-  const frameSrc =
-    board.format !== "html" || originUrl === null || selected === null
-      ? null
-      : `${originUrl}/b/${board.id}/${selected}${
-          frameFragment === null ? "" : `#${encodeURIComponent(frameFragment)}`
-        }`;
-  // html boards: hover affordances can't see into the iframe (the wall doing
-  // its job), so section-comment creation goes through a picker fed by the
-  // version's publish-time anchors. Markdown boards keep their affordances.
-  const sectionOptions =
-    board.format !== "html" || selected === null
-      ? []
-      : (data.versions.find((meta) => meta.n === selected)?.anchors ?? []).map(
-          (a) => ({ id: a.id, label: a.label }),
-        );
   return (
     <div className="board-view">
       <header className="board-header">
@@ -349,35 +329,18 @@ export function BoardView({ id }: { id: string }) {
       </nav>
       <div className="board-layout">
         <div className="board-main">
-          {board.format === "html" ? (
-            originUrl === null ? (
-              <div className="notice">
-                Board origin unavailable — reload to retry.
-              </div>
-            ) : (
-              // Exact sandbox embed from docs/security.md ("Sandbox
-              // architecture") — allow-scripts only, opaque origin. Never add
-              // sandbox flags here (invariant 2). (referrerPolicy is React's
-              // spelling of the referrerpolicy attribute — same DOM output.)
-              <iframe
-                sandbox="allow-scripts"
-                allow=""
-                referrerPolicy="no-referrer"
-                src={frameSrc ?? undefined}
-                title={board.title}
-                className="board-frame"
-              />
-            )
-          ) : version === null ? (
+          {version === null ? (
             <div className="status">loading version…</div>
           ) : (
             <div
               ref={containerRef}
               className="board-content"
-              // biome-ignore lint/security/noDangerouslySetInnerHtml: the sanctioned host-chrome display mode — content is sanitized server-side at publish and script-free by construction (docs/architecture.md, D5); html-format boards never reach this branch
-              dangerouslySetInnerHTML={{
-                __html: boardBodyHtml(version.content),
-              }}
+              // biome-ignore lint/security/noDangerouslySetInnerHtml: the sanctioned host-chrome display mode — markdown content is sanitized server-side at publish and script-free by construction (invariant 6, docs/security.md "Content rules"); html boards mount through mountBoardDocument instead (D18)
+              dangerouslySetInnerHTML={
+                board.format === "html"
+                  ? undefined
+                  : { __html: boardBodyHtml(version.content) }
+              }
             />
           )}
         </div>
@@ -387,20 +350,10 @@ export function BoardView({ id }: { id: string }) {
           versionN={selected}
           refreshKey={refreshKey}
           pendingAnchor={pendingAnchor}
-          sectionOptions={sectionOptions}
           onPendingAnchorConsumed={() => {
             setPendingAnchor(null);
           }}
           onHighlight={(anchor) => {
-            if (board.format === "html") {
-              // no host access into the sandbox — aim the frame by fragment;
-              // its own bootstrap script (origin-libs) scrolls + outlines
-              const fragment = anchorFragment(anchor);
-              if (fragment !== null) {
-                setFrameFragment(fragment);
-              }
-              return;
-            }
             highlightAnchor(anchor, containerRef.current);
           }}
           onSwitchVersion={(n) => {

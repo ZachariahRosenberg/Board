@@ -16,10 +16,6 @@ export function currentRoute(): Route {
   return parseHash(location.hash);
 }
 
-export function navigate(route: Route): void {
-  location.hash = route.name === "board" ? `${BOARD_PREFIX}${route.id}` : "#/";
-}
-
 export function onRouteChange(callback: () => void): () => void {
   window.addEventListener("hashchange", callback);
   return () => {

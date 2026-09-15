@@ -9,7 +9,6 @@ describe("makeConfig defaults", () => {
     expect(config.dataDir).toBe(join(homedir(), ".board"));
     expect(config.host).toBe("127.0.0.1");
     expect(config.port).toBe(7800);
-    expect(config.originPort).toBe(7801);
     expect(config.bind).toEqual(["127.0.0.1"]);
   });
 });
@@ -20,20 +19,17 @@ describe("makeConfig env parsing", () => {
       BOARD_DATA_DIR: "/tmp/board-data",
       BOARD_HOST: "localhost",
       BOARD_PORT: "8000",
-      BOARD_ORIGIN_PORT: "8001",
       BOARD_BIND: "127.0.0.1,host.docker.internal",
     });
     expect(config.dataDir).toBe("/tmp/board-data");
     expect(config.host).toBe("localhost");
     expect(config.port).toBe(8000);
-    expect(config.originPort).toBe(8001);
     expect(config.bind).toEqual(["127.0.0.1", "host.docker.internal"]);
   });
 
-  test("accepts port 0 for ephemeral bindings", () => {
-    const config = makeConfig({ BOARD_PORT: "0", BOARD_ORIGIN_PORT: "0" });
+  test("accepts port 0 for an ephemeral binding", () => {
+    const config = makeConfig({ BOARD_PORT: "0" });
     expect(config.port).toBe(0);
-    expect(config.originPort).toBe(0);
   });
 
   test("expands ~ in BOARD_DATA_DIR", () => {
@@ -78,24 +74,6 @@ describe("makeConfig rejects bad values", () => {
 
   test("throws on an empty BOARD_PORT", () => {
     expect(() => makeConfig({ BOARD_PORT: "" })).toThrow(/BOARD_PORT/);
-  });
-
-  test("throws on an out-of-range BOARD_ORIGIN_PORT", () => {
-    expect(() => makeConfig({ BOARD_ORIGIN_PORT: "70000" })).toThrow(
-      /BOARD_ORIGIN_PORT/,
-    );
-  });
-
-  test("throws when BOARD_PORT equals BOARD_ORIGIN_PORT", () => {
-    expect(() =>
-      makeConfig({ BOARD_PORT: "7800", BOARD_ORIGIN_PORT: "7800" }),
-    ).toThrow(/BOARD_PORT and BOARD_ORIGIN_PORT/);
-  });
-
-  test("allows both ports 0 (independent ephemeral ports)", () => {
-    const config = makeConfig({ BOARD_PORT: "0", BOARD_ORIGIN_PORT: "0" });
-    expect(config.port).toBe(0);
-    expect(config.originPort).toBe(0);
   });
 
   test("throws on an empty BOARD_HOST", () => {

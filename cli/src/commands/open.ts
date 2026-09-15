@@ -4,9 +4,9 @@ import { originUrlFor } from "../../../server/src/daemon.ts";
 import { createExchangeToken } from "../../../server/src/sessions.ts";
 import type { CommandIo } from "./token.ts";
 
-export type OpenUrl = (url: string, io: CommandIo) => void;
+type OpenUrl = (url: string, io: CommandIo) => void;
 
-export interface OpenCommandInput {
+interface OpenCommandInput {
   db: Database;
   argv: string[];
   config: Config;
@@ -30,13 +30,13 @@ function spawnXdgOpen(url: string): boolean {
   }
 }
 
-export function defaultOpener(url: string, io: CommandIo): void {
+function defaultOpener(url: string, io: CommandIo): void {
   if (!spawnXdgOpen(url)) {
     io.stderr("board: xdg-open failed; open the printed URL in a browser");
   }
 }
 
-export function boardOpenUrl(
+function boardOpenUrl(
   config: Config,
   exchangeToken: string,
   boardId?: string,

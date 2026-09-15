@@ -33,7 +33,6 @@ function testConfig(dataDir: string): Config {
     dataDir,
     host: "127.0.0.1",
     port: 7800,
-    originPort: 7801,
     bind: ["127.0.0.1"],
   };
 }

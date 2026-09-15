@@ -12,7 +12,7 @@ import type {
 import { appendEvent } from "./events.ts";
 import { MAX_BODY_BYTES } from "./http.ts";
 import { newBoardId } from "./ids.ts";
-import { extractHtmlAnchors, renderMarkdownDocument } from "./render.ts";
+import { renderHtmlDocument, renderMarkdownDocument } from "./render.ts";
 
 export class StoreError extends Error {
   constructor(message: string) {
@@ -144,7 +144,7 @@ function versionsDir(dataDir: string, boardId: string): string {
   return join(dataDir, "boards", boardId, "versions");
 }
 
-export interface CreateBoardInput {
+interface CreateBoardInput {
   title: string;
   format: BoardFormat;
   tags?: string[];
@@ -205,7 +205,7 @@ export function listBoards(db: Database): Board[] {
   return rows.map(mapBoardRow);
 }
 
-export interface PublishVersionInput {
+interface PublishVersionInput {
   format: BoardFormat;
   content: string;
   expected_version: number;
@@ -248,11 +248,17 @@ export async function publishVersion(
     sourceMd = input.content;
     anchors = rendered.anchors;
   } else {
-    // html-format documents are stored verbatim; the board-origin sandbox
-    // isolates them (docs/plan.md "one document model")
-    content = input.content;
+    // D18: html boards are derived documents too — data-ba ids are injected
+    // at publish (opt-in markers kept) and the injected document is the
+    // stored version content. Deliberately NO DOMPurify on this path: agent
+    // scripts running in the host chrome is the owner's explicit decision
+    // (risk acceptance recorded in docs/decisions.md). Old versions are
+    // never retro-injected — versions are immutable, so documents stored
+    // before this model keep their original content.
+    const rendered = renderHtmlDocument(input.content);
+    content = rendered.html;
     sourceMd = null;
-    anchors = extractHtmlAnchors(input.content);
+    anchors = rendered.anchors;
   }
 
   const n = board.current_version + 1;
@@ -370,7 +376,7 @@ export function endBoard(
   return ended;
 }
 
-export interface RestoreVersionInput {
+interface RestoreVersionInput {
   from_n: number;
   expected_version: number;
   actor: string;

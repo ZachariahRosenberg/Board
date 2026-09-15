@@ -1,4 +1,4 @@
-// MCP Streamable HTTP endpoint (M5-lite): ten tools mapping 1:1 onto the
+// MCP Streamable HTTP endpoint (M5-lite, D16): ten tools mapping 1:1 onto the
 // service layer — the same functions the REST routes call, so the event log
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
@@ -34,17 +34,17 @@ import {
 } from "./store.ts";
 import { verifyToken } from "./tokens.ts";
 
-export const MCP_SERVER_NAME = "board";
-export const MCP_SERVER_VERSION = "0.5.0";
+const MCP_SERVER_NAME = "board";
+const MCP_SERVER_VERSION = "0.5.0";
 
-export interface McpContext {
+interface McpContext {
   db: Database;
   dataDir: string;
   actor: Actor;
 }
 
-// Agent-only surface: browser sessions are valid credentials elsewhere but
-// never here (docs/security.md — the MCP endpoint is not a browser surface).
+// Agent-only surface (D16): browser sessions are valid credentials elsewhere
+// but never here (docs/security.md — the MCP endpoint is not a browser surface).
 export function requireMcpActor(req: Request, db: Database): Actor {
   const token = resolveRequestToken(req);
   if (token === null || token.length === 0) {

@@ -51,9 +51,13 @@ function makeFixtureRoot(withDist: boolean): string {
   return root;
 }
 
-function expectedHostCsp(originUrl: string): string {
-  return `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: ${originUrl}; connect-src 'self'; frame-src ${originUrl}; frame-ancestors 'none'; object-src 'none'; base-uri 'none'`;
-}
+// The exact host CSP from daemon.ts hostSecurityHeaders (D18): agent board
+// scripts run in the app origin ('unsafe-inline' script-src); connect-src
+// 'self' stays the exfil kill-switch; form-action 'self' is new — boards must
+// not form-navigate the app away; frame-src and the 7801 img allowance are
+// dropped — nothing frames anymore.
+const HOST_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'";
 
 describe("resolveWebDist", () => {
   test("walks up from a nested hint to the repo root and joins web/dist", () => {
@@ -79,25 +83,23 @@ describe("resolveWebDist", () => {
 });
 
 describe("hostSecurityHeaders", () => {
-  test("emits the exact docs/security.md host CSP plus nosniff", () => {
-    expect(hostSecurityHeaders("http://127.0.0.1:7801")).toEqual({
+  test("emits the exact D18 host CSP plus nosniff", () => {
+    expect(hostSecurityHeaders()).toEqual({
       "content-security-policy":
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:7801; connect-src 'self'; frame-src http://127.0.0.1:7801; frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
       "x-content-type-options": "nosniff",
     });
   });
 });
 
 describe("host server static serving (built dist)", () => {
-  test("GET / serves index.html with the exact host CSP (derived origin port) and nosniff", async () => {
+  test("GET / serves index.html with the exact host CSP and nosniff", async () => {
     const s = serverWith(makeFixtureRoot(true));
     const res = await s.api.get("/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     expect(await res.text()).toBe(INDEX_HTML);
-    expect(res.headers.get("content-security-policy")).toBe(
-      expectedHostCsp(s.originUrl),
-    );
+    expect(res.headers.get("content-security-policy")).toBe(HOST_CSP);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
@@ -115,9 +117,7 @@ describe("host server static serving (built dist)", () => {
     expect(css.status).toBe(200);
     expect(css.headers.get("content-type")).toBe("text/css; charset=utf-8");
     expect(await css.text()).toBe(APP_CSS);
-    expect(css.headers.get("content-security-policy")).toBe(
-      expectedHostCsp(s.originUrl),
-    );
+    expect(css.headers.get("content-security-policy")).toBe(HOST_CSP);
   });
 
   test("unknown non-file paths fall back to index.html (SPA hash routing)", async () => {
@@ -197,9 +197,7 @@ describe("host server static serving (dist not built)", () => {
     };
     expect(body.error.code).toBe("web_not_built");
     expect(body.error.message).toBe("run: make web");
-    expect(res.headers.get("content-security-policy")).toBe(
-      expectedHostCsp(s.originUrl),
-    );
+    expect(res.headers.get("content-security-policy")).toBe(HOST_CSP);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
 

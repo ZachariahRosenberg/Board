@@ -47,7 +47,7 @@ function bodyFields(ctx: RequestContext): Record<string, unknown> {
     : {};
 }
 
-export interface BoardFilters {
+interface BoardFilters {
   status?: BoardStatus;
   tag?: string;
   author?: string;

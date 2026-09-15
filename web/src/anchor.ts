@@ -74,26 +74,6 @@ export function anchorForElement(el: Element): SectionAnchor | RowAnchor {
   return { type: "section", section_id: id };
 }
 
-// html boards are aimed by URL fragment: the iframe src gains #<id> and the
-// board's own bootstrap script (origin-libs/board-bootstrap-1.js) scrolls to
-// and outlines the target — the sandbox allows no host access into the frame.
-// Text anchors aim at their section (best available target); board/image
-// anchors have no in-frame target.
-export function anchorFragment(anchor: Anchor): string | null {
-  switch (anchor.type) {
-    case "board":
-      return null;
-    case "section":
-      return anchor.section_id;
-    case "text":
-      return anchor.section_id;
-    case "row":
-      return anchor.row_id;
-    case "image":
-      return null;
-  }
-}
-
 export function anchorDescriptor(anchor: Anchor): string {
   switch (anchor.type) {
     case "board":

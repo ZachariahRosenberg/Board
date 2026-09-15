@@ -25,7 +25,7 @@ import {
 import type { CommandIo } from "./token.ts";
 
 export const BOARD_MCP_URL = "http://127.0.0.1:7800/mcp";
-export const BOARD_HEALTH_URL = "http://127.0.0.1:7800/api/health";
+const BOARD_HEALTH_URL = "http://127.0.0.1:7800/api/health";
 export const INSTALL_USAGE =
   "usage: board install [--agents opencode,claude,codex,pi] [--force]";
 
@@ -34,12 +34,12 @@ type Agent = (typeof AGENTS)[number];
 
 const DEFAULT_AGENTS: Agent[] = ["opencode", "claude"];
 
-export interface InstallArgs {
+interface InstallArgs {
   agents: Agent[];
   force: boolean;
 }
 
-export interface InstallCommandInput {
+interface InstallCommandInput {
   db: Database;
   argv: string[];
   io: CommandIo;
@@ -174,7 +174,7 @@ export class OpencodeConfigError extends Error {
   }
 }
 
-export interface BoardMcpEntry {
+interface BoardMcpEntry {
   type: "remote";
   url: string;
   enabled: boolean;
@@ -362,7 +362,8 @@ function mintToken(
       io.stdout(`--force: revoked old token "${name}"`);
     }
     // tokens.name is the PRIMARY KEY, so even a revoked token keeps its name;
-    // the fresh mint falls back to the first free suffix (board-<agent>-2 …).
+    // the fresh mint falls back to the first free suffix (board-<agent>-2 …)
+    // — the suffix is the visible trace of the re-mint (D17).
     return firstFreeCreate(db, name);
   }
   try {
@@ -429,6 +430,9 @@ export function runInstallCommand({
     if (token === null) {
       continue;
     }
+    // Print-once discipline (invariant 8): the token is stored hashed, so
+    // this is the only time the plaintext exists after the mint — if the
+    // agent config is lost, the fix is a --force re-mint, not a re-show.
     io.stdout(
       `token for "${token.name}" (store it now — it is stored hashed and cannot be shown again):`,
     );

@@ -1,11 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  currentRoute,
-  navigate,
-  onRouteChange,
-  parseHash,
-  type Route,
-} from "./router.ts";
+import { currentRoute, onRouteChange, parseHash } from "./router.ts";
 import { installDom } from "./test-dom.ts";
 
 installDom();
@@ -16,14 +10,6 @@ describe("router", () => {
     expect(parseHash("")).toEqual({ name: "list" });
     expect(parseHash("#/boards/x1")).toEqual({ name: "board", id: "x1" });
     expect(parseHash("#/boards/")).toEqual({ name: "list" });
-  });
-
-  test("navigate sets the hash", () => {
-    const board: Route = { name: "board", id: "z9" };
-    navigate(board);
-    expect(location.hash).toBe("#/boards/z9");
-    navigate({ name: "list" });
-    expect(location.hash).toBe("#/");
   });
 
   test("currentRoute follows the hash", () => {

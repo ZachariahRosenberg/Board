@@ -66,9 +66,7 @@ export interface TestServer {
   dataDir: string;
   db: Database;
   hostUrl: string;
-  originUrl: string;
   api: HttpClient;
-  origin: HttpClient;
   createAgent(name: string): Promise<{ name: string; token: string }>;
   stop(): Promise<void>;
 }
@@ -86,16 +84,13 @@ export function startTestServer(options: TestServerOptions = {}): TestServer {
     BOARD_DATA_DIR: dataDir,
     BOARD_HOST: "127.0.0.1",
     BOARD_PORT: "0",
-    BOARD_ORIGIN_PORT: "0",
   });
   const daemon = startDaemon(config, { webRootHint: options.webRootHint });
   return {
     dataDir,
     db: daemon.db,
     hostUrl: daemon.hostUrl,
-    originUrl: daemon.originUrl,
     api: makeHttpClient(daemon.hostUrl),
-    origin: makeHttpClient(daemon.originUrl),
     createAgent: async (name: string) => {
       const created = createToken(daemon.db, { name });
       return { name: created.name, token: created.token };

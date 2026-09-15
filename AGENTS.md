@@ -6,12 +6,12 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 `board` is a local-first shared board system: an always-on Bun daemon hosts rich boards (markdown + interactive HTML) that agents publish via MCP/REST, a human annotates with anchored comments in a web UI, and everyone consumes via an append-only event log.
 
-**Current status: M5-lite complete** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 10 tools, stateless Streamable HTTP), humans comment in the web UI with anchored text/section/row comments (threads, resolve, live SSE), agents consume feedback via the comments cursor — the one consumption path (D15). `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M5 webhooks, M4 board-origin boards, M6 assets/import/export, then dogfooding toward v1. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
+**Current status: M5-lite + M4 complete (D18: full host-render)** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 10 tools, stateless Streamable HTTP), every board — markdown and agent HTML — renders in the host chrome with full anchoring (text selection, sections, rows; html boards get auto-injected `data-ba` at publish, scripts run per D18), humans comment with threads + resolve + live SSE, agents consume feedback via the comments cursor (D15). `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M5 webhooks, M6 assets/import/export (import must revisit D18's foreign-content caveat), M7 audit view + hardening. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
 
 ## Read order
 
 1. [docs/plan.md](docs/plan.md) — scope, data model, milestones (source of truth)
-2. [docs/architecture.md](docs/architecture.md) — two-origin model, request flows, events
+2. [docs/architecture.md](docs/architecture.md) — process model, request flows, events
 3. [docs/security.md](docs/security.md) — threat model and the invariants below
 4. [docs/style-guide.md](docs/style-guide.md) — code conventions
 5. [docs/decisions.md](docs/decisions.md) — why things are the way they are
@@ -40,17 +40,18 @@ Run typecheck, lint, and tests before finishing any change. If a command doesn't
 These exist for security reasons ([docs/security.md](docs/security.md)). Do not violate them, even temporarily, even in tests:
 
 1. Bind loopback only (`127.0.0.1`) unless the user explicitly configures otherwise.
-2. Board iframes are `sandbox="allow-scripts"` — never add `allow-same-origin`, `allow-forms`, `allow-popups`, or `allow-top-navigation`.
-3. Never widen the board-origin CSP beyond the allowlist in [docs/security.md](docs/security.md) (`connect-src 'none'` stays).
-4. All writes go through the daemon API. Agents never write to `~/.board` directly.
-5. Events are append-only. Never mutate or delete an event row.
-6. Markdown/agent text rendered in the host app passes through DOMPurify. No exceptions.
-7. Asset ingest verifies magic bytes + mime allowlist + size cap; the `{path}` file-copy route must never be usable to read non-image files.
-8. Never log or commit tokens; tokens are stored hashed.
+2. Agent HTML boards render in the host chrome with scripts running (D18, owner decision 2026-09-15). The host CSP is the guard: `connect-src 'self'` never opens, `form-action 'self'` stays. Never widen the host CSP beyond the allowlist in [docs/security.md](docs/security.md).
+3. All writes go through the daemon API. Agents never write to `~/.board` directly.
+4. Events are append-only. Never mutate or delete an event row.
+5. Markdown published content passes through DOMPurify — no exceptions. html-format boards are exempt per D18; never add sanitization to them, or skip it for markdown, without the owner's say-so.
+6. Asset ingest verifies magic bytes + mime allowlist + size cap; the `{path}` file-copy route must never be usable to read non-image files.
+7. Never log or commit tokens; tokens are stored hashed.
 
 ## Conventions
 
 - TypeScript strict mode; formatting via biome — see [docs/style-guide.md](docs/style-guide.md).
+- **Minimal codebase**: when a feature is removed, its code, tests, and fixtures are removed in the same change — no dead code, no vestigial surfaces, no "might be useful later."
+- **Decision comments**: every non-obvious decision site in code carries a short comment with its why (and a [docs/decisions.md](docs/decisions.md) reference when one exists) so future agents inherit the context.
 - A change that affects the API surface, anchor schema, event types, or security headers updates the matching doc in the same change.
 - Decisions that deviate from the plan get a new entry in [docs/decisions.md](docs/decisions.md) — don't silently amend the plan.
 - Mark milestone progress by appending status to the milestone bullet in [docs/plan.md](docs/plan.md).

@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!server/origin-libs"]
+    "includes": ["**", "!server/libs"]
   },
   "formatter": {
     "enabled": true,

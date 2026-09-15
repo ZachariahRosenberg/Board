@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Actor } from "../domain.ts";
 
-export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export interface RequestContext {
   body?: unknown;

@@ -385,7 +385,7 @@ describe("POST /api/boards/:id/publish", () => {
     }
   });
 
-  test("stores an html-format document verbatim with extracted data-ba anchors", async () => {
+  test("stores an html-format document with injected data-ba anchors (D18)", async () => {
     const { s, token } = await setup();
     const board = await makeBoard(s, token, {
       title: "Widget",
@@ -397,7 +397,10 @@ describe("POST /api/boards/:id/publish", () => {
       content: HTML_DOC,
       expected_version: 0,
     });
-    expect(version.content).toBe(HTML_DOC);
+    // D18: the stored document is the publish-time id-injected derived doc
+    expect(version.content).toBe(
+      `<!doctype html><html><head></head><body><section data-ba="s1" data-ba-label="Panel"><p>widget</p></section></body></html>`,
+    );
     expect(version.source_md).toBeNull();
     expect(version.anchors).toEqual([
       { id: "s1", kind: "block", label: "Panel" },

@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard template</title>
 <script src="/libs/chart-4.4.9.umd.min.js"></script>
-<script src="/libs/board-bootstrap-1.js"></script>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -43,13 +42,13 @@
 <section data-ba="s-header" data-ba-label="Header">
   <div class="card">
     <h1>Dashboard template</h1>
-    <p class="sub">The M4 acceptance artifact: charts + a form + anchored sections, running inside the sandbox. Agents copy this file as a starting point.</p>
+    <p class="sub">The M4 acceptance artifact: charts + a form + anchored sections, rendering in the host app. Agents copy this file as a starting point.</p>
   </div>
 </section>
 
 <section data-ba="s-chart" data-ba-label="Chart">
   <div class="card">
-    <h2>Chart (chart.js, vendored on the origin)</h2>
+    <h2>Chart (chart.js, vendored + version-pinned)</h2>
     <canvas id="loop" width="700" height="260" aria-label="dogfood loop counts" role="img"></canvas>
   </div>
 </section>
@@ -66,8 +65,9 @@
     <button type="button" id="vote">Vote</button>
     <div class="tally" id="tally" hidden></div>
     <p class="note" id="boundary">
-      Your pick lives only in this frame's memory — the sandbox has no storage and no network
-      (<code>connect-src 'none'</code>). To make it count for the plan, comment on this section.
+      Your pick lives only in this page's memory — nothing submits anywhere
+      (the app CSP's <code>form-action 'self'</code> blocks form navigation).
+      To make it count for the plan, comment on this section.
     </p>
   </div>
 </section>
@@ -76,10 +76,10 @@
   <div class="card">
     <h2>Boundary notes</h2>
     <ul>
-      <li>Scripts run because <code>sandbox="allow-scripts"</code>; the frame's origin is opaque — no storage, no cookies, no reaching the host app.</li>
-      <li>Libraries load from this origin's <code>/libs/*</code> under the CSP's <code>script-src 'self'</code> — vendored and pinned.</li>
-      <li>The vote button is <code>type="button"</code> on purpose: form submission is blocked (<code>form-action 'none'</code>, no <code>allow-forms</code>) — this page deliberately stays put.</li>
-      <li>Include <code>/libs/board-bootstrap-1.js</code> (as this page does) so comment chips can aim at sections.</li>
+      <li>This board renders inside the host app: scripts run in the app's origin, unsandboxed — the owner's explicit decision (D18).</li>
+      <li>Libraries load root-relative from <code>/libs/*</code>, served and version-pinned by the app; the app CSP's <code>connect-src 'self'</code> keeps everything else off the network.</li>
+      <li>Comment affordances are native — hover any section or select text in the browser, then hit the comment button. Keep <code>data-ba</code> markers (and labels, for chip names) on your sections; anything unlabeled gets an id injected at publish.</li>
+      <li>The vote button is <code>type="button"</code> on purpose: the app CSP's <code>form-action 'self'</code> still blocks form submissions leaving the app — this page deliberately stays put.</li>
     </ul>
   </div>
 </section>

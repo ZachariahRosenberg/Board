@@ -26,12 +26,11 @@ A local-first, always-on shared board system: a Bun daemon hosting rich boards (
     assets/<id>.<ext>              images bundled with their board
     events.jsonl                   per-board event channel (mirrors this board's rows in board.db)
 
-one process: boardd (Bun.serve x2)
-  127.0.0.1:7800  host app (React+Vite SPA) | /api/* REST | /mcp (Streamable HTTP) | /api/stream SSE
-  127.0.0.1:7801  board origin: /b/<id>/<version> documents | /libs/* vendored libs | /assets/<id>/*
+one process: boardd (Bun.serve, single port — D18)
+  127.0.0.1:7800  host app (React+Vite SPA) | /api/* REST | /mcp (Streamable HTTP) | /api/stream SSE | /libs/* vendored libs
 ```
 
-- **Two origins** so sandboxed board content is origin-isolated from the host chrome (MDN guidance; Claude Artifacts pattern). Ports configurable (`BOARD_PORT`, `BOARD_ORIGIN_PORT`); default bind `127.0.0.1`, with a configurable bind list for Docker-hosted agents (see Deployment docs).
+- **One origin** (D18, 2026-09-15): every board renders in the host chrome — the planned two-origin sandbox was built for M4, dogfooded one round, and removed by the owner's decision; the host CSP is the guard (`connect-src 'self'`, `form-action 'self'` — see [decisions.md](decisions.md) D18 and [security.md](security.md)). Port configurable (`BOARD_PORT`); default bind `127.0.0.1`, with a configurable bind list for Docker-hosted agents (see Deployment docs).
 - **SQLite is the queryable source of truth; every board is also a self-contained bundle on disk** — `boards/<id>/` holds its versions, assets, metadata, and its own `events.jsonl`, so a board zips/moves/greps as one unit (export/import are built on this). The global `events.jsonl` remains the machine-wide audit log + tail/file-watch substrate (Claude `FileChanged`, opencode plugin events) requiring no client library.
 - **Lifecycle via Makefile** — the primary operational interface: `make serve` (foreground daemon; tmux/systemd unit documented), `make open`, `make list`, `make token`, `make install`, `make test`, `make dev`. No auto-spawn magic.
 
@@ -45,16 +44,14 @@ one process: boardd (Bun.serve x2)
 - **subscribers**: `board_id`, `agent`, `kind` (`sse` | `cursor` | `webhook`), `webhook_url?`, `secret?` (HMAC key), `last_seq`, `last_seen` — presence tracking + webhook registry
 - **tokens**: agent name, SHA-256 hash, scopes, `created_at` — per-agent bearer tokens
 
-## Boards: one document model, two display modes
+## Boards: one document model (D18)
 
-**Unified document model** (answering your question): there is only one stored artifact — every version is an **HTML document**, stored and served from `:7801` as one immutable file inside the board bundle. `format` is an input convenience only:
+**Unified document model**: there is only one stored artifact — every version is an **HTML document**, rendered in the host chrome. `format` is an input convenience only:
 
 - `format: markdown` — the daemon renders it at publish (`marked` GFM → **DOMPurify** → mermaid `securityLevel:'strict'` → katex → code highlighting) and **auto-injects `data-ba` ids onto every top-level block, heading, and table row** — sections and rows become annotatable with zero agent effort. Both markdown source and derived HTML are kept.
-- `format: html` — the author's document, served verbatim; annotatable sections via opt-in `data-ba="section-id"` markers (optional `data-ba-label`), extracted at publish into the version's `anchors`.
+- `format: html` — the author's document, **unsanitized by owner decision (D18)**: at publish the daemon injects `data-ba` ids onto unlabeled top-level blocks and table rows (opt-in `data-ba="id"` + `data-ba-label` markers kept verbatim), stores the derived document, and the web app mounts it into the host DOM with head styles carried over and scripts re-created so they execute. Every board gets the full anchoring UX: hover affordances on sections/rows and text-selection comments.
 
-**What pure HTML-only (everything in the iframe) would cost in v1**: arbitrary text-highlight comments (requirement 3.a would slip to v1.1 with the bridge) and the tight trusted-chrome selection UX. So we keep a **display-mode hybrid**: markdown-derived boards are script-free by construction (DOMPurify strips scripts), so the UI renders them in the **host chrome** — preserving v1 text-highlight + section + row anchoring right next to the comment sidebar. Hand-authored HTML boards render in the sandboxed iframe (`<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer">`) with `data-ba` section anchoring until the v1.1 bridge. Everything else *is* unified: one storage/serving path, one anchor model, and `format: html` boards freely mix prose + custom widgets.
-
-**Image annotation** — images are **file-copy ingested** (on localhost, "upload" is really a local copy): human drag/drop in the UI, or agent `POST /assets` with a binary body **or** `{"path": "/abs/file.png"}` for the daemon to copy locally. Path ingest is safe by construction: magic-byte image verification + mime allowlist + size cap mean it cannot be repurposed to read arbitrary host files. Assets live inside the board bundle (`boards/<id>/assets/`), served from `:7801/assets/<id>`. Annotation overlay = JSON `{arrows:[{x1,y1,x2,y2}], boxes:[{x,y,text}]}` rendered as an SVG overlay; an overlay set is a comment anchored to `{type:"image", asset_id, overlay}` (timestamped, author-tagged, threaded). Schema documented so agents can annotate screenshots programmatically. Hand-rolled minimal editor (drag arrow, drag textbox) — no excalidraw dependency. **Docker-hosted agents** can't reach host loopback by default — documented options: run with `--network=host`, or `extra_hosts: ["host.docker.internal:host-gateway"]` with the daemon's configurable bind list, or volume-mount `~/.board` and tail `boards/<id>/events.jsonl` from inside the container.
+**Image annotation** — images are **file-copy ingested** (on localhost, "upload" is really a local copy): human drag/drop in the UI, or agent `POST /assets` with a binary body **or** `{"path": "/abs/file.png"}` for the daemon to copy locally. Path ingest is safe by construction: magic-byte image verification + mime allowlist + size cap mean it cannot be repurposed to read arbitrary host files. Assets live inside the board bundle (`boards/<id>/assets/`), served at `/assets/<id>` from the host origin. **Note (D18):** imported assets/boards are foreign content — the import path (M6) must re-examine quarantine before shipping. Annotation overlay = JSON `{arrows:[{x1,y1,x2,y2}], boxes:[{x,y,text}]}` rendered as an SVG overlay; an overlay set is a comment anchored to `{type:"image", asset_id, overlay}` (timestamped, author-tagged, threaded). Schema documented so agents can annotate screenshots programmatically. Hand-rolled minimal editor (drag arrow, drag textbox) — no excalidraw dependency. **Docker-hosted agents** can't reach host loopback by default — documented options: run with `--network=host`, or `extra_hosts: ["host.docker.internal:host-gateway"]` with the daemon's configurable bind list, or volume-mount `~/.board` and tail `boards/<id>/events.jsonl` from inside the container.
 
 ## REST API (`:7800/api`, bearer auth)
 
@@ -76,12 +73,11 @@ Async consumption loop (documented in skill): publish → `board_get_comments?si
 
 ## Security implementation checklist
 
-- Board origin CSP: `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors http://127.0.0.1:7800` + `Permissions-Policy` deny-all
-- Host CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:7801; connect-src 'self'; frame-src http://127.0.0.1:7801; frame-ancestors 'none'; object-src 'none'; base-uri 'none'`
+- Host CSP (D18 — the one guard for board script): `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'` — `connect-src 'self'` (exfil kill-switch) and `form-action 'self'` never open. *The former board-origin CSP and Permissions-Policy set was removed with the origin server by D18.*
 - API middleware: Host-header allowlist (127.0.0.1/localhost only — DNS-rebinding defense), reject `Sec-Fetch-Site: cross-site` on unsafe methods, `application/json`-only writes, no CORS, no GET mutations
 - Per-agent bearer tokens (hashed at rest); human browser session via one-time `?token=` exchange from `board open` (stored localStorage, sent as bearer)
-- DOMPurify for all markdown/agent text in host chrome; mermaid strict; uploads mime-allowlisted + size-capped; SVG sanitized
-- PostMessage nonce-handshake protocol designed now, implemented with the v1.1 bridge
+- DOMPurify for markdown (invariant 5; html-format boards exempt per D18); mermaid strict; uploads mime-allowlisted + size-capped; SVG sanitized
+- ~~PostMessage nonce-handshake bridge~~ — dropped by D18 (no iframe to bridge)
 
 ## Web UI (React + Vite, served by daemon)
 
@@ -112,7 +108,7 @@ Async consumption loop (documented in skill): publish → `board_get_comments?si
 - **M1** Scaffold (Bun workspaces monorepo: `server/`, `web/`, `cli/`, `skill/`, `docs/`), daemon on two ports, SQLite + WAL, board-bundle layout, global + per-board events (dual-write), auth middleware (Host/Sec-Fetch/bearer), board + version CRUD with the unified HTML document model (markdown rendered at publish), 409 conflict, Makefile, `tsc --noEmit` + biome + `bun test` wired — **done 2026-09-15** (226 tests green; restore rejects on ended boards per spec; happy-dom↔DOMPurify compat patches logged as D11)
 - **M2** Web shell: board list, markdown-derived boards rendered in host chrome (marked → DOMPurify → mermaid → katex, auto `data-ba`), version switcher, token exchange flow — **done 2026-09-15** (287 tests green; daemon serves the SPA with host CSP; mermaid renders client-side per D12; human sessions via one-time exchange + `make open`)
 - **M3** Comments + anchoring (section, text-highlight, and table-row anchors; re-anchor by quote), sidebar w/ threads + resolve, SSE live updates, feedback-markdown serializer, per-agent comment cursors — **done 2026-09-15** (357 tests green; anchors validated server-side against the stored version; feedback grammar golden-tested; SSE with replay + heartbeats per D13; unresolved counts on the board list; live smoke: publish → comment → reply → resolve → cursor poll → feedback → SSE)
-- **M4** HTML boards: `:7801` serving + security headers, sandboxed iframe embed, vendored/pinned mermaid+tailwind+plotly+katex, publish-time anchor extraction (`data-ba`), HTML dashboard template working end-to-end inside the sandbox
+- **M4** HTML boards: `:7801` serving + security headers, sandboxed iframe embed, vendored/pinned mermaid+tailwind+plotly+katex, publish-time anchor extraction (`data-ba`), HTML dashboard template working end-to-end inside the sandbox — **status: complete 2026-09-15 under D18 (full host-render)**: the two-origin sandbox was built (waves A–B: origin serving, iframe embed, fragment aiming, section picker), dogfooded for one round, and **removed by the owner's decision the same day** (D18) in favor of full host-render — agent HTML mounts in the host chrome with scripts running, html publishes store id-injected derived documents (auto `data-ba` → full hover/selection anchoring on every board), `/libs/*` vendored pinned libs are served by the host (chart.js 4.4.9 verified in-browser during the spike), and the net code change of the pivot is −525 lines. Template at `skills/templates/dashboard.html`.
 - **M5** MCP Streamable HTTP endpoint + all tools; SDK-client integration test; subscriptions/presence + webhook dispatcher (HMAC, retry, dead-letter); skill + templates + `.mcp.json` + `make install` for opencode + claude — **status: M5-lite complete 2026-09-15**: `/mcp` live (stateless JSON-mode Streamable HTTP, D16) with the 10-tool v1 surface and SDK-client integration tests; `make install` auto-mints per-agent tokens and wires opencode (comment-preserving JSONC merge) + claude (`claude mcp add`) + codex/pi snippets; skill shipped at `skills/board/`. Remaining M5: webhook subscribe/dispatcher; `board_upload_image`/`board_export` follow with M6.
 - **M6** Assets + image annotation (file-copy ingest via binary or `{path}`, overlay editor + SVG render, image-anchored comments, agent-side overlay schema); bundle export/import
 - **M7** Audit view, restore UI, docs complete (api / anchors / feedback-grammar / security / deployment incl. Docker), hardening pass (caps, sanitize, headers audit), full smoke: two simulated agents + human comments → async feedback consumed via cursor and webhook
@@ -121,7 +117,9 @@ Async consumption loop (documented in skill): publish → `board_get_comments?si
 
 ## Phase 2 backlog (explicitly deferred)
 
-Bridge overlay for full in-HTML anchoring (text highlights/elements inside interactive boards — the plannotator bridge pattern) · word-level round diffs (easel-grade) · version-diff toggle between board versions (dogfooded ask; cheap interim: two tabs + the version switcher) · anchors surviving edits beyond quote re-match · native MCP `subscriptions/listen` push + Claude channels · CRDT co-editing (Yjs) · live agent-telemetry board regions (opencode/claude SSE as board content) · markdown boards embedding inline sandboxed applet blocks (prose + widgets in one board) · ngrok remote mode · vendored lib expansion (htmx, alpine, d3)
+Word-level round diffs (easel-grade) · version-diff toggle between board versions (dogfooded ask; cheap interim: two tabs + the version switcher) · anchors surviving edits beyond quote re-match · native MCP `subscriptions/listen` push + Claude channels · CRDT co-editing (Yjs) · live agent-telemetry board regions (opencode/claude SSE as board content) · ngrok remote mode · vendored lib expansion (htmx, alpine, d3)
+
+*(The v1.1 in-iframe anchoring bridge and markdown applet-block items were dropped by D18 — host render makes both moot: agent HTML already runs in the app page with native anchoring.)*
 
 ## Out of scope
 
@@ -129,8 +127,7 @@ Cloud hosting, accounts, sharing portals · chat pane in the board (terminal sta
 
 ## Risks / open items
 
-- Mermaid + plotly inside `sandbox="allow-scripts"` iframes: expected to work (DOM + inline scripts allowed, no storage needed) — verified first thing in M4; static-render fallback if a lib fights the sandbox
-- Tailwind play-cdn script vendored & pinned (single script; confirmed pattern)
+- ~~Mermaid + plotly inside `sandbox="allow-scripts"` iframes~~ — retired by D18 (no iframes); chart.js verified in-browser during the M4 spike; other libs follow the same vendored-pin pattern
 - Concurrent multi-agent writes: SQLite WAL + busy-retry; the daemon is the single writer (all writes go through the API — agents never write files directly)
 - `{path}` file-copy ingest: magic-byte image verification + mime allowlist + size cap prevent repurposing it to read arbitrary host files
 - Docker-agent networking: loopback unreachable from containers by default — deployment doc covers `--network=host`, `host.docker.internal` + bind list, and volume-mounted events tailing
