@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
-import type { Board } from "../../../server/src/domain.ts";
-import { listBoards } from "../api.ts";
+import { type BoardWithCounts, listBoards } from "../api.ts";
 import { formatDate } from "../format.ts";
 
 export function BoardList() {
-  const [boards, setBoards] = useState<Board[] | null>(null);
+  const [boards, setBoards] = useState<BoardWithCounts[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,6 +53,11 @@ export function BoardList() {
             <span>v{board.current_version}</span>
             <span>{board.created_by}</span>
             <span>{formatDate(board.created_at)}</span>
+            {board.unresolved_comments > 0 && (
+              <span className="unresolved-count">
+                {board.unresolved_comments} unresolved
+              </span>
+            )}
           </div>
           {board.tags.length > 0 && (
             <div className="board-card-tags">

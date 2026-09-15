@@ -1,3 +1,4 @@
+import { countUnresolvedRoots } from "../comments.ts";
 import type { Board, BoardStatus } from "../domain.ts";
 import { HttpError, jsonOk } from "../http.ts";
 import {
@@ -52,7 +53,10 @@ export interface BoardFilters {
   author?: string;
 }
 
-export function filterBoards(boards: Board[], filters: BoardFilters): Board[] {
+export function filterBoards<T extends Board>(
+  boards: T[],
+  filters: BoardFilters,
+): T[] {
   return boards.filter(
     (board) =>
       (filters.status === undefined || board.status === filters.status) &&
@@ -84,7 +88,12 @@ function listBoardsHandler(req: Request, ctx: RequestContext): Response {
     tag: tag === null ? undefined : asString(tag, "tag"),
     author: author === null ? undefined : asString(author, "author"),
   };
-  return jsonOk(filterBoards(listBoards(ctx.db), filters));
+  // unresolved root-thread counts ride along on the list (docs/plan.md REST API)
+  const boards = listBoards(ctx.db).map((board) => ({
+    ...board,
+    unresolved_comments: countUnresolvedRoots(ctx.db, board.id),
+  }));
+  return jsonOk(filterBoards(boards, filters));
 }
 
 function getBoardHandler(_req: Request, ctx: RequestContext): Response {

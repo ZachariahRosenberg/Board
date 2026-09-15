@@ -82,6 +82,7 @@ export interface Comment {
   id: string;
   board_id: string;
   version_n: number;
+  seq: number;
   anchor: Anchor;
   body: string;
   author: string;

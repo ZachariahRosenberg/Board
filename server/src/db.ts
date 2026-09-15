@@ -94,6 +94,14 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       );
     `,
   },
+  {
+    version: 3,
+    sql: `
+      -- comments.seq: the global event seq of the comment's creation event —
+      -- the per-agent cursor substrate (docs/plan.md comments?since=)
+      ALTER TABLE comments ADD COLUMN seq INTEGER;
+    `,
+  },
 ];
 
 export function openDb(dataDir: string): Database {

@@ -21,11 +21,7 @@ interface EventRow {
 
 export const DEFAULT_EVENT_LIMIT = 200;
 
-export function appendEvent(
-  db: Database,
-  dataDir: string,
-  ev: EventInput,
-): BoardEvent {
+export function appendEventDb(db: Database, ev: EventInput): BoardEvent {
   const row = db
     .prepare(
       "INSERT INTO events (ts, actor, type, board_id, payload) VALUES (?, ?, ?, ?, ?) RETURNING seq, ts, actor, type, board_id, payload",
@@ -38,16 +34,55 @@ export function appendEvent(
       JSON.stringify(ev.payload ?? {}),
     ) as EventRow;
   const event = mapEventRow(row);
+  emit(event);
+  return event;
+}
+
+// db row first, file mirrors second: on a crash the jsonl files can lag the db
+// (a missing tail line) but never lead it (a line whose seq never committed).
+export function mirrorEventFiles(dataDir: string, event: BoardEvent): void {
   const line = `${JSON.stringify(event)}\n`;
-  // db row first, file mirrors second: on a crash the jsonl files can lag the db
-  // (a missing tail line) but never lead it (a line whose seq never committed).
   appendFileSync(join(dataDir, "events.jsonl"), line);
   if (event.board_id !== null) {
     const boardDir = join(dataDir, "boards", event.board_id);
     mkdirSync(boardDir, { recursive: true });
     appendFileSync(join(boardDir, "events.jsonl"), line);
   }
+}
+
+export function appendEvent(
+  db: Database,
+  dataDir: string,
+  ev: EventInput,
+): BoardEvent {
+  const event = appendEventDb(db, ev);
+  mirrorEventFiles(dataDir, event);
   return event;
+}
+
+type EventCallback = (ev: BoardEvent) => void;
+const callbacks = new Set<EventCallback>();
+
+// Live subscribers (SSE). Callbacks run on a microtask so they fire after the
+// surrounding db transaction commits (bun:sqlite transactions are synchronous).
+// SSE is best-effort (docs/architecture.md) — cursors are the reliable channel.
+export function onEvent(callback: EventCallback): () => void {
+  callbacks.add(callback);
+  return () => {
+    callbacks.delete(callback);
+  };
+}
+
+function emit(event: BoardEvent): void {
+  if (callbacks.size === 0) {
+    return;
+  }
+  const snapshot = event;
+  queueMicrotask(() => {
+    for (const callback of callbacks) {
+      callback(snapshot);
+    }
+  });
 }
 
 export interface GetEventsOptions {

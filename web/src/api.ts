@@ -1,10 +1,17 @@
-import type { Board, Version, VersionMeta } from "../../server/src/domain.ts";
+import type {
+  Board,
+  Comment,
+  Version,
+  VersionMeta,
+} from "../../server/src/domain.ts";
 import { clearSessionToken, getSessionToken } from "./token.ts";
 
 export interface BoardWithVersions {
   board: Board;
   versions: VersionMeta[];
 }
+
+export type BoardWithCounts = Board & { unresolved_comments: number };
 
 export class ApiError extends Error {
   readonly status: number;
@@ -76,8 +83,8 @@ export async function exchange(oneTimeToken: string): Promise<string> {
   return body.token;
 }
 
-export function listBoards(): Promise<Board[]> {
-  return apiFetch<Board[]>("/api/boards");
+export function listBoards(): Promise<BoardWithCounts[]> {
+  return apiFetch<BoardWithCounts[]>("/api/boards");
 }
 
 export function getBoard(id: string): Promise<BoardWithVersions> {
@@ -86,4 +93,57 @@ export function getBoard(id: string): Promise<BoardWithVersions> {
 
 export function getVersion(id: string, n: number): Promise<Version> {
   return apiFetch<Version>(`/api/boards/${id}/versions/${n}`);
+}
+
+export interface CreateCommentInput {
+  anchor: Comment["anchor"];
+  body: string;
+  version_n: number;
+}
+
+export function createComment(
+  boardId: string,
+  input: CreateCommentInput,
+): Promise<Comment> {
+  return apiFetch<Comment>(`/api/boards/${boardId}/comments`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function replyComment(
+  commentId: string,
+  body: string,
+): Promise<Comment> {
+  return apiFetch<Comment>(`/api/comments/${commentId}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
+}
+
+export function resolveComment(commentId: string): Promise<Comment> {
+  return apiFetch<Comment>(`/api/comments/${commentId}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export interface CommentsPage {
+  comments: Comment[];
+  last_seq: number;
+}
+
+export function getComments(
+  boardId: string,
+  since?: number,
+): Promise<CommentsPage> {
+  const query = since === undefined ? "" : `?since=${since}`;
+  return apiFetch<CommentsPage>(`/api/boards/${boardId}/comments${query}`);
+}
+
+// EventSource cannot set Authorization headers — the one-time-session token
+// rides as a query param on the stream (docs/security.md session model).
+export function streamUrl(): string {
+  const token = getSessionToken();
+  return token === null ? "" : `/api/stream?token=${encodeURIComponent(token)}`;
 }

@@ -1,3 +1,4 @@
+import type { Anchor } from "./domain.ts";
 import { HttpError } from "./http.ts";
 
 // Boundary validation (style guide): parse external input into typed values
@@ -68,4 +69,47 @@ export function asNonNegativeIntString(
     throw invalid(field, "a non-negative integer");
   }
   return Number(raw);
+}
+
+// Anchor JSON from the wire, discriminated by `type` (docs/plan.md "Data model").
+// Shape-level only — semantic validity (does the section exist?) is the
+// comments store's job against the stored version.
+export function asAnchor(value: unknown, field: string): Anchor {
+  if (typeof value !== "object" || value === null) {
+    throw invalid(field, "an anchor object");
+  }
+  const obj = value as Record<string, unknown>;
+  switch (obj.type) {
+    case "board":
+      return { type: "board" };
+    case "section":
+      return {
+        type: "section",
+        section_id: asString(obj.section_id, `${field}.section_id`),
+      };
+    case "text":
+      return {
+        type: "text",
+        section_id: asString(obj.section_id, `${field}.section_id`),
+        originalText: asString(obj.originalText, `${field}.originalText`),
+        startOffset: asInt(obj.startOffset, `${field}.startOffset`),
+        endOffset: asInt(obj.endOffset, `${field}.endOffset`),
+      };
+    case "row":
+      return {
+        type: "row",
+        section_id: asString(obj.section_id, `${field}.section_id`),
+        row_id: asString(obj.row_id, `${field}.row_id`),
+      };
+    case "image":
+      return {
+        type: "image",
+        asset_id: asString(obj.asset_id, `${field}.asset_id`),
+      };
+    default:
+      throw invalid(
+        `${field}.type`,
+        "one of: board, section, text, row, image",
+      );
+  }
 }

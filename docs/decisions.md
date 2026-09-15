@@ -73,3 +73,9 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Context:** docs/plan.md's publish pipeline lists mermaid in the server-side chain (marked → DOMPurify → mermaid → katex), but mermaid's renderer needs real layout measurement (SVG text metrics) and fights headless DOMs — and markdown boards display in the trusted host chrome anyway.
 - **Decision:** The daemon's publish pipeline (marked → DOMPurify → data-ba injection → katex → shiki) leaves mermaid fences as `<pre class="mermaid">` source blocks in the stored document; the web app renders them client-side (npm mermaid, `securityLevel: "strict"`), degrading to source text on render failure.
 - **Consequences:** No headless-mermaid hack on top of D11's patches; stored documents stay render-free at publish; web mermaid stays strict-mode pinned. HTML-format boards (M4) will use the vendored board-origin mermaid inside the sandbox instead.
+
+## D13 — SSE auth via query param; client-held cursors — 2026-09-15
+
+- **Context:** EventSource cannot set Authorization headers, and docs/plan.md's per-agent cursors were worded as a server-acked backlog ("resume returns exactly the unacknowledged").
+- **Decision:** `GET /api/stream` accepts the agent/session token via the Authorization header (preferred) or `?token=` (the EventSource fallback — why-commented in the route; tokens never logged). Comment cursors stay CLIENT-held: `?since=` is exclusive on the comment's stamped creation-event seq — at-least-once, restart-safe; agent-token polls refresh a `subscribers` presence row (kind `cursor`) rather than acking.
+- **Consequences:** Browser SSE works without cookies; presence (M5) can show "listening" agents derived from real cursor reads. A server-acked backlog remains a phase-2 option if agent crash-recovery proves to need it.

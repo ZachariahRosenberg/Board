@@ -237,18 +237,15 @@ body {
 .board-content code {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.9em;
+  background: var(--bg-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 
 .board-content pre code {
   background: none;
   border: none;
   padding: 0;
-}
-
-.board-content code {
-  background: var(--bg-subtle);
-  border-radius: 4px;
-  padding: 1px 5px;
 }
 
 .board-content blockquote {
@@ -264,4 +261,232 @@ body {
 
 .board-content .mermaid {
   text-align: center;
+}
+
+.unresolved-count {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.board-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .board-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.comment-sidebar {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 14px 16px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  position: sticky;
+  top: 16px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+
+.sidebar-title {
+  font-weight: 600;
+}
+
+.sidebar-count {
+  color: var(--fg-muted);
+  font-size: 0.8em;
+}
+
+.notice.small,
+.status.small,
+.empty.small {
+  padding: 12px 0;
+  font-size: 0.9em;
+}
+
+.thread {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread:last-child {
+  border-bottom: none;
+}
+
+.thread.resolved {
+  opacity: 0.6;
+}
+
+.anchor-chip {
+  display: inline-block;
+  font-size: 0.72em;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: 999px;
+  padding: 1px 9px;
+  margin-bottom: 6px;
+}
+
+.anchor-chip.clickable {
+  cursor: pointer;
+}
+
+.anchor-chip.clickable:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.thread-body {
+  white-space: pre-wrap;
+}
+
+.thread-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--fg-muted);
+  font-size: 0.8em;
+  margin-top: 6px;
+}
+
+.author-badge {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.author-badge.human {
+  color: var(--open);
+}
+
+.resolved-mark {
+  color: var(--open);
+}
+
+.linklike {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+}
+
+.thread-reply {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 0 0 12px;
+  border-left: 2px solid var(--border);
+  margin-top: 6px;
+  font-size: 0.9em;
+  flex-wrap: wrap;
+}
+
+.reply-body {
+  white-space: pre-wrap;
+}
+
+.reply-date {
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
+
+.composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--fg);
+  padding: 8px 10px;
+  font: inherit;
+  resize: vertical;
+  margin-top: 6px;
+}
+
+.composer-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.composer-actions button:first-child {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 5px 16px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.composer-actions button:first-child:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.quote {
+  margin: 6px 0 0;
+  padding: 2px 10px;
+  border-left: 3px solid var(--accent);
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
+
+.floating-comment {
+  position: fixed;
+  z-index: 20;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 0.8em;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 25%);
+}
+
+.board-content mark.anchor-hit {
+  background: rgb(255 212 0 / 45%);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.board-content .anchor-target {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.board-content.anchor-board {
+  border-color: var(--accent);
 }

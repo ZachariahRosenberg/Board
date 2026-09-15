@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 `board` is a local-first shared board system: an always-on Bun daemon hosts rich boards (markdown + interactive HTML) that agents publish via MCP/REST, a human annotates with anchored comments in a web UI, and everyone consumes via an append-only event log.
 
-**Current status: M2 complete** — daemon, storage, events, auth, board/version CRUD, and the web shell (board list, host-chrome board rendering, version switcher, `make open` session flow) are live. Next up: M3 (comments + anchoring). The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
+**Current status: M3 complete** — the full feedback loop works over REST: agents publish boards, humans comment in the web UI with anchored text/section/row comments (threads, resolve, live SSE), agents consume feedback via cursors, the feedback grammar, or the event stream. Next up: M5-lite (MCP endpoint + `make install`), then dogfooding. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
 
 ## Read order
 

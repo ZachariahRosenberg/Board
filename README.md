@@ -26,7 +26,7 @@ Boards render markdown (with mermaid + katex) and agent-authored HTML+CSS+JS (ta
 
 ## Status
 
-**M2 complete** — the full read loop works: agents publish over REST, boards render in the browser (markdown + mermaid + katex in the host chrome), you open sessions with `make open`, versions are switchable. Comments + anchoring land with M3, MCP + agent wiring with M5. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
+**M3 complete — the dogfood loop is live.** Agents publish boards over REST; you comment in the browser with anchored text highlights, sections, and table rows; threads resolve; everything updates live over SSE; agents read feedback as a structured markdown grammar via cursors. MCP + one-command agent wiring (`make install`) land with M5. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
 
 ## Documentation
 

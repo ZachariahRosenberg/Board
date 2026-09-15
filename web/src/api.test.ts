@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
   ApiError,
+  createComment,
   exchange,
   getBoard,
+  getComments,
   getVersion,
   listBoards,
   onUnauthorized,
+  replyComment,
+  resolveComment,
+  streamUrl,
 } from "./api.ts";
 import { installDom } from "./test-dom.ts";
 import { clearSessionToken, setSessionToken } from "./token.ts";
@@ -112,5 +117,54 @@ describe("api client", () => {
   test("failed exchange rejects with ApiError unauthorized", async () => {
     mockFetch(() => jsonResponse(401, { error: { code: "unauthorized" } }));
     await expect(exchange("burned")).rejects.toThrow("make open");
+  });
+
+  test("comment endpoints hit the right paths with the right bodies", async () => {
+    setSessionToken("sess-token");
+    const calls = mockFetch((call) => {
+      if (call.input.includes("/reply")) {
+        return jsonResponse(201, { id: "c2" });
+      }
+      if (call.input.includes("/resolve")) {
+        return jsonResponse(200, { id: "c1" });
+      }
+      if (call.input.includes("comments")) {
+        return jsonResponse(200, { comments: [], last_seq: 0 });
+      }
+      return jsonResponse(201, { id: "c3" });
+    });
+    await createComment("b1", {
+      anchor: { type: "board" },
+      body: "note",
+      version_n: 2,
+    });
+    await replyComment("c1", "a reply");
+    await resolveComment("c1");
+    const page = await getComments("b1", 5);
+    expect(page.last_seq).toBe(0);
+    expect(
+      calls.map((call) => `${call.init?.method ?? "GET"} ${call.input}`),
+    ).toEqual([
+      "POST /api/boards/b1/comments",
+      "POST /api/comments/c1/reply",
+      "POST /api/comments/c1/resolve",
+      "GET /api/boards/b1/comments?since=5",
+    ]);
+    expect(calls[0].init?.body).toBe(
+      JSON.stringify({
+        anchor: { type: "board" },
+        body: "note",
+        version_n: 2,
+      }),
+    );
+    expect(calls[1].init?.body).toBe(JSON.stringify({ body: "a reply" }));
+    clearSessionToken();
+  });
+
+  test("streamUrl embeds the session token url-encoded", () => {
+    setSessionToken("abc/def+ghi=");
+    expect(streamUrl()).toBe("/api/stream?token=abc%2Fdef%2Bghi%3D");
+    clearSessionToken();
+    expect(streamUrl()).toBe("");
   });
 });

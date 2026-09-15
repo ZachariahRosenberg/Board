@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { requireAuth } from "./auth.ts";
+import { CommentNotFound, InvalidAnchor } from "./comments.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
 import {
@@ -14,6 +15,7 @@ import {
   requireJsonContentType,
 } from "./http.ts";
 import { boardRoutes } from "./routes/boards.ts";
+import { commentRoutes } from "./routes/comments.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { healthRoute } from "./routes/health.ts";
 import {
@@ -24,6 +26,7 @@ import {
   routeRequiresAuth,
 } from "./routes/route.ts";
 import { sessionRoutes } from "./routes/session.ts";
+import { streamRoute } from "./routes/stream.ts";
 import {
   BoardEnded,
   BoardNotFound,
@@ -51,7 +54,9 @@ const routes: Route[] = [
   healthRoute,
   ...sessionRoutes,
   ...boardRoutes,
+  ...commentRoutes,
   ...eventRoutes,
+  streamRoute,
 ];
 
 // Board-origin CSP allowlist from docs/security.md — never widen it (invariant 3); connect-src 'none' is the exfiltration kill switch. frame-ancestors is derived from the actual host origin at boot.
@@ -261,6 +266,12 @@ function errorResponse(
   }
   if (err instanceof BoardNotFound) {
     return jsonError(404, "board_not_found", err.message, headers);
+  }
+  if (err instanceof CommentNotFound) {
+    return jsonError(404, "comment_not_found", err.message, headers);
+  }
+  if (err instanceof InvalidAnchor) {
+    return jsonError(400, "invalid_anchor", err.message, headers);
   }
   if (err instanceof VersionNotFound) {
     return jsonError(404, "version_not_found", err.message, headers);
