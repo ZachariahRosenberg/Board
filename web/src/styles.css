@@ -528,6 +528,14 @@ body {
   border-radius: 4px;
 }
 
+/* a text anchor whose quote no longer exists in the current version —
+   the section is the best remaining target, badged so it reads as moved */
+.board-content .anchor-moved {
+  outline: 2px dashed var(--warning);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 .board-content.anchor-board {
   border-color: var(--primary);
 }

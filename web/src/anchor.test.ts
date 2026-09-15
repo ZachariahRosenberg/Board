@@ -180,6 +180,48 @@ describe("highlightAnchor", () => {
     ).toBe(false);
   });
 
+  test("quote drift re-anchors by the quote, ignoring stale offsets", () => {
+    // dogfooded: after a version edit the stored offsets pointed at unrelated
+    // text ("it highlights a different word") — the quote is the truth
+    const root = asDomElement(container());
+    highlightAnchor(
+      {
+        type: "text",
+        section_id: "b2",
+        originalText: "beta",
+        startOffset: 0,
+        endOffset: 4,
+      },
+      root,
+    );
+    expect(root.querySelector("mark.anchor-hit")?.textContent).toBe("beta");
+    expect(root.querySelector('[data-ba="b2"]')?.textContent).toBe(
+      "alpha beta gamma",
+    );
+    clearHighlight(root);
+  });
+
+  test("a quote that no longer exists outlines the section as moved", () => {
+    const root = asDomElement(container());
+    highlightAnchor(
+      {
+        type: "text",
+        section_id: "b2",
+        originalText: "delta",
+        startOffset: 6,
+        endOffset: 10,
+      },
+      root,
+    );
+    const section = root.querySelector('[data-ba="b2"]');
+    expect(section?.classList.contains("anchor-target")).toBe(true);
+    expect(section?.classList.contains("anchor-moved")).toBe(true);
+    expect(root.querySelector("mark.anchor-hit")).toBe(null);
+    clearHighlight(root);
+    expect(section?.classList.contains("anchor-moved")).toBe(false);
+    expect(section?.classList.contains("anchor-target")).toBe(false);
+  });
+
   test("board anchors tint the whole document container", () => {
     const root = asDomElement(container());
     highlightAnchor(BOARD_ANCHOR, root);

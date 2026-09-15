@@ -121,7 +121,7 @@ Async consumption loop (documented in skill): publish → `board_get_comments?si
 
 ## Phase 2 backlog (explicitly deferred)
 
-Bridge overlay for full in-HTML anchoring (text highlights/elements inside interactive boards — the plannotator bridge pattern) · word-level round diffs (easel-grade) · native MCP `subscriptions/listen` push + Claude channels · CRDT co-editing (Yjs) · anchors surviving edits beyond quote re-match · live agent-telemetry board regions (opencode/claude SSE as board content) · markdown boards embedding inline sandboxed applet blocks (prose + widgets in one board) · ngrok remote mode · vendored lib expansion (htmx, alpine, d3)
+Bridge overlay for full in-HTML anchoring (text highlights/elements inside interactive boards — the plannotator bridge pattern) · word-level round diffs (easel-grade) · version-diff toggle between board versions (dogfooded ask; cheap interim: two tabs + the version switcher) · anchors surviving edits beyond quote re-match · native MCP `subscriptions/listen` push + Claude channels · CRDT co-editing (Yjs) · live agent-telemetry board regions (opencode/claude SSE as board content) · markdown boards embedding inline sandboxed applet blocks (prose + widgets in one board) · ngrok remote mode · vendored lib expansion (htmx, alpine, d3)
 
 ## Out of scope
 

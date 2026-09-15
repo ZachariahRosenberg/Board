@@ -117,8 +117,10 @@ function textNodes(root: Node): Text[] {
 
 export function clearHighlight(root: Element): void {
   root.classList.remove("anchor-board");
-  for (const el of [...root.querySelectorAll(".anchor-target")]) {
-    el.classList.remove("anchor-target");
+  for (const el of [
+    ...root.querySelectorAll(".anchor-target, .anchor-moved"),
+  ]) {
+    el.classList.remove("anchor-target", "anchor-moved");
   }
   for (const mark of [...root.querySelectorAll("mark.anchor-hit")]) {
     const parent = mark.parentNode;
@@ -131,8 +133,49 @@ export function clearHighlight(root: Element): void {
   }
 }
 
-// Scroll to the anchor and mark it: text quotes get a <mark> over the range
-// (single-text-node quotes; multi-node falls back to a section outline).
+// Wrap [startOffset, endOffset) of the element's text in a mark; a range that
+// cannot be surrounded (crosses node boundaries) falls back to outlining the
+// section.
+function markTextRange(
+  el: Element,
+  startOffset: number,
+  endOffset: number,
+): void {
+  let consumed = 0;
+  for (const node of textNodes(el)) {
+    const len = node.data.length;
+    if (startOffset >= consumed + len) {
+      consumed += len;
+      continue;
+    }
+    const localStart = Math.max(0, startOffset - consumed);
+    const localEnd = Math.min(len, endOffset - consumed);
+    if (localEnd > localStart) {
+      const doc = node.ownerDocument;
+      const mark = doc.createElement("mark");
+      mark.className = "anchor-hit";
+      const range = doc.createRange();
+      range.setStart(node, localStart);
+      range.setEnd(node, localEnd);
+      try {
+        range.surroundContents(mark);
+      } catch {
+        el.classList.add("anchor-target");
+      }
+      return;
+    }
+    consumed += len;
+  }
+  el.classList.add("anchor-target");
+}
+
+// Scroll to the anchor and mark it. Text anchors re-anchor QUOTE-FIRST: the
+// stored quote is the truth and the offsets are a hint from the version of
+// record — after an edit, blind offsets highlight whatever text now sits at
+// those positions (dogfooded: "it highlights a different word"). The quote is
+// re-located in the current document; if the quote itself is gone (section
+// rewritten), the section is outlined and badged as moved rather than guessed
+// at. Anchors that survive beyond quote re-match remain a phase-2 item.
 export function highlightAnchor(anchor: Anchor, root: Element | null): void {
   if (root === null) {
     return;
@@ -152,32 +195,13 @@ export function highlightAnchor(anchor: Anchor, root: Element | null): void {
   }
   el.scrollIntoView({ behavior: "smooth", block: "center" });
   if (anchor.type === "text") {
-    let consumed = 0;
-    for (const node of textNodes(el)) {
-      const len = node.data.length;
-      if (anchor.startOffset >= consumed + len) {
-        consumed += len;
-        continue;
-      }
-      const localStart = Math.max(0, anchor.startOffset - consumed);
-      const localEnd = Math.min(len, anchor.endOffset - consumed);
-      if (localEnd > localStart) {
-        const doc = node.ownerDocument;
-        const mark = doc.createElement("mark");
-        mark.className = "anchor-hit";
-        const range = doc.createRange();
-        range.setStart(node, localStart);
-        range.setEnd(node, localEnd);
-        try {
-          range.surroundContents(mark);
-        } catch {
-          el.classList.add("anchor-target");
-        }
-        return;
-      }
-      consumed += len;
+    const text = el.textContent ?? "";
+    const idx = text.indexOf(anchor.originalText);
+    if (idx === -1) {
+      el.classList.add("anchor-target", "anchor-moved");
+      return;
     }
-    el.classList.add("anchor-target");
+    markTextRange(el, idx, idx + anchor.originalText.length);
     return;
   }
   el.classList.add("anchor-target");

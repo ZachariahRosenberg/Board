@@ -38,6 +38,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hideResolved, setHideResolved] = useState(false);
 
   const boardOpen = props.boardStatus === "open";
 
@@ -111,6 +112,11 @@ export function CommentSidebar(props: CommentSidebarProps) {
       : comments
           .filter((comment) => comment.in_reply_to === null)
           .sort((a, b) => a.seq - b.seq);
+  // resolved threads fold away on request (dogfooded ask); counts stay honest
+  const visibleThreads = hideResolved
+    ? threads.filter((thread) => thread.resolved_at === null)
+    : threads;
+  const anyResolved = threads.some((thread) => thread.resolved_at !== null);
   const unresolved = threads.filter(
     (thread) => thread.resolved_at === null,
   ).length;
@@ -155,6 +161,17 @@ export function CommentSidebar(props: CommentSidebarProps) {
             + board
           </button>
         )}
+        {anyResolved && (
+          <button
+            type="button"
+            className="pill"
+            onClick={() => {
+              setHideResolved((value) => !value);
+            }}
+          >
+            {hideResolved ? "show resolved" : "hide resolved"}
+          </button>
+        )}
       </header>
       {error !== null && <div className="error">{error}</div>}
       {!boardOpen && (
@@ -166,9 +183,13 @@ export function CommentSidebar(props: CommentSidebarProps) {
         <div className="empty small">
           No comments yet. Select text or hover a section to comment.
         </div>
+      ) : visibleThreads.length === 0 ? (
+        <div className="empty small">
+          All resolved threads hidden — toggle "show resolved" to see them.
+        </div>
       ) : (
         <div className="thread-list">
-          {threads.map((thread) => (
+          {visibleThreads.map((thread) => (
             <ThreadView
               key={thread.id}
               root={thread}

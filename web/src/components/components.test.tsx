@@ -521,6 +521,38 @@ describe("CommentSidebar", () => {
     expect(getCommentsCalls).toHaveLength(2);
   });
 
+  test("hide-resolved toggle folds resolved threads away and back", async () => {
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onHighlight={() => {}}
+      />,
+    );
+    await act(async () => {});
+    expect(container.innerHTML).toContain("✓ resolved");
+    const hide = [...container.querySelectorAll("button.pill")].find(
+      (button) => button.textContent === "hide resolved",
+    ) as HTMLElement;
+    await act(async () => {
+      hide.click();
+    });
+    expect(container.innerHTML).not.toContain("✓ resolved");
+    // the header counts stay honest while folded
+    expect(container.innerHTML).toContain("1 unresolved / 2 threads");
+    const show = [...container.querySelectorAll("button.pill")].find(
+      (button) => button.textContent === "show resolved",
+    ) as HTMLElement;
+    await act(async () => {
+      show.click();
+    });
+    expect(container.innerHTML).toContain("✓ resolved");
+  });
+
   test("pendingAnchor opens the composer with the anchor chip and quote", async () => {
     createdComments.length = 0;
     const container = render(
