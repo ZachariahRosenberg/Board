@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ApiError,
+  completePasteExchange,
   createComment,
   exchange,
   getBoard,
@@ -166,5 +167,21 @@ describe("api client", () => {
     expect(streamUrl()).toBe("/api/stream?token=abc%2Fdef%2Bghi%3D");
     clearSessionToken();
     expect(streamUrl()).toBe("");
+  });
+
+  test("completePasteExchange stores the session on success", async () => {
+    clearSessionToken();
+    mockFetch(() => jsonResponse(200, { token: "session-9" }));
+    await completePasteExchange("one-time-9");
+    expect(localStorage.getItem("board.session")).toBe("session-9");
+    clearSessionToken();
+  });
+
+  test("completePasteExchange failure leaves the prior session untouched", async () => {
+    setSessionToken("prior-session");
+    mockFetch(() => jsonResponse(401, { error: { code: "unauthorized" } }));
+    await expect(completePasteExchange("burned")).rejects.toThrow("make open");
+    expect(localStorage.getItem("board.session")).toBe("prior-session");
+    clearSessionToken();
   });
 });

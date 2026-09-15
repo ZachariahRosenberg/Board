@@ -4,7 +4,11 @@ import type {
   Version,
   VersionMeta,
 } from "../../server/src/domain.ts";
-import { clearSessionToken, getSessionToken } from "./token.ts";
+import {
+  clearSessionToken,
+  getSessionToken,
+  setSessionToken,
+} from "./token.ts";
 
 export interface BoardWithVersions {
   board: Board;
@@ -81,6 +85,14 @@ export async function exchange(oneTimeToken: string): Promise<string> {
   }
   const body = (await res.json()) as { token: string };
   return body.token;
+}
+
+// The paste-gate submit essence, extracted so the flow is unit-testable
+// without synthetic DOM input events (happy-dom + React 19 dedupe those).
+export async function completePasteExchange(
+  oneTimeToken: string,
+): Promise<void> {
+  setSessionToken(await exchange(oneTimeToken));
 }
 
 export function listBoards(): Promise<BoardWithCounts[]> {

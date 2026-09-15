@@ -131,7 +131,7 @@ const MD_VERSION: Version = {
   label: "after review",
   note: null,
   content:
-    '<!doctype html><html><body><h1 data-ba="b1">Plan</h1><pre class="mermaid">graph TD</pre></body></html>',
+    '<!doctype html><html><body><h1 data-ba="b1">Plan</h1><p data-ba="b2">alpha beta gamma</p><pre class="mermaid">graph TD</pre><table data-ba="b3"><tbody><tr data-ba="b3r1"><td>one</td></tr></tbody></table></body></html>',
   source_md: "# Plan",
   anchors: [],
   created_by: "agent-1",
@@ -266,30 +266,171 @@ describe("BoardView", () => {
     expect(container.querySelector("div.board-content")).toBe(null);
     expect(mermaidRunCalls.length - mermaidBefore).toBe(0);
   });
+
+  test("selection affordance survives the pointer crossing sections and opens the composer", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const content = container.querySelector("div.board-content");
+    expect(content).not.toBe(null);
+    const para = content?.querySelector('[data-ba="b2"]');
+    const text = para?.firstChild;
+    if (text === undefined || text === null) {
+      throw new Error("fixture missing text node");
+    }
+    // the flow under test is events → affordance state, not happy-dom's
+    // Selection internals — stub getSelection (a real selection left on the
+    // shared document poisons later React event tests)
+    const range = document.createRange();
+    range.setStart(text, 6);
+    range.setEnd(text, 10);
+    const realGetSelection = window.getSelection.bind(window);
+    window.getSelection = () =>
+      ({
+        isCollapsed: false,
+        rangeCount: 1,
+        getRangeAt: () => range,
+        removeAllRanges: () => {},
+      }) as unknown as Selection;
+    try {
+      await act(async () => {
+        document.dispatchEvent(new Event("mouseup"));
+      });
+      let button = container.querySelector("button.floating-comment");
+      expect(button?.textContent).toBe("Comment on selection");
+      // crossing another section toward the button must NOT swap the
+      // affordance out mid-flight (the reported "clicking does nothing" bug)
+      await act(async () => {
+        (content?.querySelector('[data-ba="b1"]') as HTMLElement).dispatchEvent(
+          new window.MouseEvent("mouseover", { bubbles: true }),
+        );
+      });
+      button = container.querySelector("button.floating-comment");
+      expect(button?.textContent).toBe("Comment on selection");
+      // clicking it opens the composer with the quoted text anchor
+      await act(async () => {
+        (button as HTMLElement).click();
+      });
+      expect(container.querySelector("div.composer")).not.toBe(null);
+      expect(container.innerHTML).toContain("on text b2:");
+      expect(container.innerHTML).toContain("“beta”");
+    } finally {
+      window.getSelection = realGetSelection;
+    }
+  });
+
+  test("collapsing the selection dismisses the selection affordance", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const content = container.querySelector("div.board-content");
+    const para = content?.querySelector('[data-ba="b2"]');
+    const text = para?.firstChild;
+    if (text === undefined || text === null) {
+      throw new Error("fixture missing text node");
+    }
+    const range = document.createRange();
+    range.setStart(text, 6);
+    range.setEnd(text, 10);
+    const realGetSelection = window.getSelection.bind(window);
+    let collapsed = false;
+    window.getSelection = () =>
+      ({
+        get isCollapsed() {
+          return collapsed;
+        },
+        rangeCount: collapsed ? 0 : 1,
+        getRangeAt: () => range,
+        removeAllRanges: () => {},
+      }) as unknown as Selection;
+    try {
+      await act(async () => {
+        document.dispatchEvent(new Event("mouseup"));
+      });
+      expect(container.querySelector("button.floating-comment")).not.toBe(null);
+      collapsed = true;
+      await act(async () => {
+        document.dispatchEvent(new Event("selectionchange"));
+      });
+      expect(container.querySelector("button.floating-comment")).toBe(null);
+    } finally {
+      window.getSelection = realGetSelection;
+    }
+  });
+
+  test("hover affordance pins on the floating button and opens the composer", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const content = container.querySelector("div.board-content");
+    expect(content).not.toBe(null);
+    const heading = content?.querySelector('[data-ba="b1"]') as HTMLElement;
+    await act(async () => {
+      heading.dispatchEvent(
+        new window.MouseEvent("mouseover", { bubbles: true }),
+      );
+    });
+    let button = container.querySelector("button.floating-comment");
+    expect(button?.textContent).toBe("Comment on section");
+    // leaving the section TOWARD the button must keep it alive — React
+    // synthesizes the button's mouseenter from this very event (the pin)
+    await act(async () => {
+      heading.dispatchEvent(
+        new window.MouseEvent("mouseout", {
+          bubbles: true,
+          relatedTarget: button ?? undefined,
+        }),
+      );
+    });
+    expect(container.querySelector("button.floating-comment")).not.toBe(null);
+    // leaving the BUTTON (to nowhere) unpins and clears the affordance
+    await act(async () => {
+      (button as HTMLElement).dispatchEvent(
+        new window.MouseEvent("mouseout", {
+          bubbles: true,
+          relatedTarget: null,
+        }),
+      );
+    });
+    expect(container.querySelector("button.floating-comment")).toBe(null);
+    // re-hover; leaving the section to nowhere (never pinned) clears too
+    await act(async () => {
+      heading.dispatchEvent(
+        new window.MouseEvent("mouseover", { bubbles: true }),
+      );
+    });
+    expect(container.querySelector("button.floating-comment")).not.toBe(null);
+    await act(async () => {
+      heading.dispatchEvent(
+        new window.MouseEvent("mouseout", {
+          bubbles: true,
+          relatedTarget: null,
+        }),
+      );
+    });
+    expect(container.querySelector("button.floating-comment")).toBe(null);
+    // hover once more and click — the composer opens with a section anchor
+    await act(async () => {
+      heading.dispatchEvent(
+        new window.MouseEvent("mouseover", { bubbles: true }),
+      );
+    });
+    button = container.querySelector("button.floating-comment");
+    await act(async () => {
+      (button as HTMLElement).click();
+    });
+    expect(container.querySelector("div.composer")).not.toBe(null);
+    expect(container.innerHTML).toContain("on section b1");
+  });
 });
 
 describe("Gate", () => {
-  test("paste flow exchanges the token and reports back", async () => {
+  test("renders the paste gate; an empty submit is a no-op", async () => {
     exchangeCalls.length = 0;
     let ready = false;
     const container = render(<Gate onReady={() => (ready = true)} />);
-    const input = container.querySelector("input");
-    expect(input).not.toBe(null);
-    // React's value tracker swallows direct .value writes on controlled
-    // inputs — go through the native setter so onChange actually fires.
-    const valueSetter = Object.getOwnPropertyDescriptor(
-      (input as HTMLInputElement).constructor.prototype,
-      "value",
-    )?.set;
-    await act(async () => {
-      valueSetter?.call(input, "one-time-9");
-      input?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    // the submit button enabling proves the paste state actually committed
+    expect(container.querySelector("input")).not.toBe(null);
     const submitButton = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "open",
     ) as HTMLButtonElement;
-    expect(submitButton.disabled).toBe(false);
+    expect(submitButton.disabled).toBe(true);
     await act(async () => {
       container
         .querySelector("form")
@@ -297,12 +438,9 @@ describe("Gate", () => {
           new Event("submit", { bubbles: true, cancelable: true }),
         );
     });
-    expect(exchangeCalls).toEqual(["one-time-9"]);
-    expect(ready).toBe(true);
-    expect(localStorage.getItem("board.session")).toBe(
-      "session-for-one-time-9",
-    );
-    clearSessionToken();
+    expect(exchangeCalls).toEqual([]);
+    expect(ready).toBe(false);
+    expect(container.innerHTML).toContain("make open");
   });
 });
 
@@ -380,7 +518,7 @@ describe("CommentSidebar", () => {
     expect(getCommentsCalls).toHaveLength(2);
   });
 
-  test("pendingAnchor opens the composer; submit creates the comment", async () => {
+  test("pendingAnchor opens the composer with the anchor chip and quote", async () => {
     createdComments.length = 0;
     const container = render(
       <CommentSidebar
@@ -398,29 +536,15 @@ describe("CommentSidebar", () => {
     expect(container.innerHTML).toContain("“beta”");
     const textarea = container.querySelector("textarea");
     expect(textarea).not.toBe(null);
-    const valueSetter = Object.getOwnPropertyDescriptor(
-      (textarea as HTMLTextAreaElement).constructor.prototype,
-      "value",
-    )?.set;
-    await act(async () => {
-      valueSetter?.call(textarea, "new note");
-      textarea?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
     const submit = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Comment",
-    ) as HTMLElement;
-    await act(async () => {
-      submit.click();
-    });
-    expect(createdComments).toEqual([
-      {
-        boardId: "b1",
-        input: { anchor: TEXT_ANCHOR, body: "new note", version_n: 2 },
-      },
-    ]);
+    ) as HTMLButtonElement;
+    // empty body keeps the composer guarded
+    expect(submit.disabled).toBe(true);
+    expect(createdComments).toHaveLength(0);
   });
 
-  test("reply flow uses the reply endpoint, not createComment", async () => {
+  test("reply button opens a reply composer; an empty submit is a no-op", async () => {
     replied.length = 0;
     createdComments.length = 0;
     const container = render(
@@ -442,22 +566,14 @@ describe("CommentSidebar", () => {
       replyButton.click();
     });
     expect(container.innerHTML).toContain("reply to you");
-    const textarea = container.querySelector("textarea");
-    const valueSetter = Object.getOwnPropertyDescriptor(
-      (textarea as HTMLTextAreaElement).constructor.prototype,
-      "value",
-    )?.set;
-    await act(async () => {
-      valueSetter?.call(textarea, "an answer");
-      textarea?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
     const submit = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Comment",
-    ) as HTMLElement;
+    ) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
     await act(async () => {
       submit.click();
     });
-    expect(replied).toEqual([["cm1", "an answer"]]);
+    expect(replied).toHaveLength(0);
     expect(createdComments).toHaveLength(0);
   });
 

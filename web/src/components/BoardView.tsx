@@ -41,6 +41,14 @@ export function BoardView({ id }: { id: string }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const hoverTargetRef = useRef<Element | null>(null);
+  // The floating button pins the affordance while the pointer is on it —
+  // without the pin, leaving the section toward the button unmounts it
+  // before the click lands (the reported "icon disappears" bug).
+  const pinnedRef = useRef(false);
+  // While a selection affordance is up, hover affordances are suppressed —
+  // the pointer crosses other sections on the way to the button and would
+  // swap it out mid-flight (the reported "clicking does nothing" bug).
+  const selectionActiveRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -146,12 +154,21 @@ export function BoardView({ id }: { id: string }) {
   }, [id]);
 
   // Selection affordance: text selected inside the board content offers a
-  // comment button at the selection (mouseup — the selection is done by then).
+  // comment button at the selection (mouseup — the selection is done by
+  // then). Dismissed when the selection collapses anywhere else.
   useEffect(() => {
     const onMouseUp = (): void => {
+      if (pinnedRef.current) {
+        return;
+      }
       const sel = window.getSelection();
       const root = containerRef.current;
-      if (sel === null || root === null || sel.isCollapsed) {
+      if (
+        sel === null ||
+        root === null ||
+        sel.isCollapsed ||
+        sel.rangeCount === 0
+      ) {
         return;
       }
       const range = sel.getRangeAt(0);
@@ -163,6 +180,7 @@ export function BoardView({ id }: { id: string }) {
         return;
       }
       const rect = range.getBoundingClientRect();
+      selectionActiveRef.current = true;
       setAffordance({
         anchor,
         top: rect.top - 34,
@@ -170,9 +188,20 @@ export function BoardView({ id }: { id: string }) {
         label: "Comment on selection",
       });
     };
+    const onSelectionChange = (): void => {
+      const sel = window.getSelection();
+      if (selectionActiveRef.current && (sel === null || sel.isCollapsed)) {
+        selectionActiveRef.current = false;
+        if (!pinnedRef.current) {
+          setAffordance(null);
+        }
+      }
+    };
     document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("selectionchange", onSelectionChange);
     return () => {
       document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
     };
   }, []);
 
@@ -192,13 +221,18 @@ export function BoardView({ id }: { id: string }) {
       return target.closest("[data-ba]");
     };
     const onMouseOver = (event: Event): void => {
+      if (selectionActiveRef.current) {
+        return;
+      }
       const el = closest(event);
       if (el === hoverTargetRef.current) {
         return;
       }
       hoverTargetRef.current = el;
       if (el === null || !root.contains(el)) {
-        setAffordance(null);
+        if (!pinnedRef.current) {
+          setAffordance(null);
+        }
         return;
       }
       const anchor = anchorForElement(el);
@@ -211,8 +245,19 @@ export function BoardView({ id }: { id: string }) {
       });
     };
     const onMouseOut = (event: MouseEvent): void => {
-      const to = event.relatedTarget as Element | null;
-      if (to !== null && hoverTargetRef.current?.contains(to) === true) {
+      // happy-dom reports an absent relatedTarget as undefined, not null —
+      // normalize or every "left the content" event would hit contains(undefined)
+      const to = event.relatedTarget ?? null;
+      // moving onto the floating button (or while pinned) keeps the affordance
+      const toButton =
+        to !== null &&
+        to instanceof Element &&
+        to.classList.contains("floating-comment");
+      if (pinnedRef.current || toButton) {
+        return;
+      }
+      // still inside the content — the next mouseover replaces the affordance
+      if (to !== null && to instanceof Node && root.contains(to)) {
         return;
       }
       hoverTargetRef.current = null;
@@ -301,9 +346,26 @@ export function BoardView({ id }: { id: string }) {
           type="button"
           className="floating-comment"
           style={{ top: `${affordance.top}px`, left: `${affordance.left}px` }}
+          onMouseDown={(event) => {
+            // keep the selection alive through the click — the default
+            // collapse would race the handler and drop the affordance
+            event.preventDefault();
+          }}
+          onMouseEnter={() => {
+            pinnedRef.current = true;
+          }}
+          onMouseLeave={() => {
+            pinnedRef.current = false;
+            hoverTargetRef.current = null;
+            if (!selectionActiveRef.current) {
+              setAffordance(null);
+            }
+          }}
           onClick={() => {
             setPendingAnchor(affordance.anchor);
             setAffordance(null);
+            selectionActiveRef.current = false;
+            pinnedRef.current = false;
             window.getSelection()?.removeAllRanges();
           }}
         >

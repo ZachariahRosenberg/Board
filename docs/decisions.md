@@ -79,3 +79,9 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Context:** EventSource cannot set Authorization headers, and docs/plan.md's per-agent cursors were worded as a server-acked backlog ("resume returns exactly the unacknowledged").
 - **Decision:** `GET /api/stream` accepts the agent/session token via the Authorization header (preferred) or `?token=` (the EventSource fallback — why-commented in the route; tokens never logged). Comment cursors stay CLIENT-held: `?since=` is exclusive on the comment's stamped creation-event seq — at-least-once, restart-safe; agent-token polls refresh a `subscribers` presence row (kind `cursor`) rather than acking.
 - **Consequences:** Browser SSE works without cookies; presence (M5) can show "listening" agents derived from real cursor reads. A server-acked backlog remains a phase-2 option if agent crash-recovery proves to need it.
+
+## D14 — Agent-managed daemon lifecycle — phase 2 — 2026-09-15
+
+- **Context:** D10 made the Makefile the operational interface with no auto-spawn magic. The seamless workflow — an agent mid-task spins up boardd when it needs a human decision, shares a session link, and owns the daemon lifecycle — is the natural endgame for the dogfood loop.
+- **Decision (user, 2026-09-15):** Defer to phase 2. For the MVP the human keeps the server running; the `board_status` tool and the skill detect a down daemon and instruct recovery (`make serve`). Full agent lifecycle management (spawn via tmux/nohup, link sharing, shutdown) gets its own decision later, with explicit safety boundaries.
+- **Consequences:** M5-lite ships without lifecycle tools; the skill documents the manual path. The daemon-down case stays a first-class detectable state, not a mystery failure.

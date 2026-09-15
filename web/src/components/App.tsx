@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { exchange, onUnauthorized } from "../api.ts";
+import { completePasteExchange, exchange, onUnauthorized } from "../api.ts";
 import { currentRoute, onRouteChange, type Route } from "../router.ts";
 import {
   extractOneTimeToken,
@@ -64,7 +64,11 @@ export function App() {
   if (phase === "gate") {
     return <Gate onReady={() => setPhase("ready")} />;
   }
-  return route.name === "board" ? <BoardView id={route.id} /> : <BoardList />;
+  return (
+    <div className="container">
+      {route.name === "board" ? <BoardView id={route.id} /> : <BoardList />}
+    </div>
+  );
 }
 
 export function Gate({ onReady }: { onReady: () => void }) {
@@ -80,7 +84,7 @@ export function Gate({ onReady }: { onReady: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      setSessionToken(await exchange(token));
+      await completePasteExchange(token);
       onReady();
     } catch (err) {
       setError(err instanceof Error ? err.message : "exchange failed");
