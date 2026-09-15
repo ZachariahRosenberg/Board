@@ -314,19 +314,31 @@ describe("BoardView", () => {
     expect(content?.querySelector("style")?.textContent).toContain(
       ".dash-note",
     );
-    // scripts re-created: external keeps its src + ordered execution,
-    // inline keeps its text (innerHTML alone would never run them)
-    const scripts = [...(content?.querySelectorAll("script") ?? [])];
-    expect(scripts).toHaveLength(2);
+    // scripts re-created in document order — the external one is created and
+    // awaited BEFORE the inline runs (dogfooded: "Chart is not defined"). In
+    // tests script fetching is disabled, so the load event is dispatched by
+    // hand to advance the sequence.
+    let scripts = [...(content?.querySelectorAll("script") ?? [])];
+    expect(scripts).toHaveLength(1);
     expect(scripts[0].getAttribute("src")).toBe("/libs/chart-4.4.9.umd.min.js");
-    expect(scripts[0].async).toBe(false);
+    await act(async () => {
+      scripts[0].dispatchEvent(new Event("load"));
+    });
+    scripts = [...(content?.querySelectorAll("script") ?? [])];
+    expect(scripts).toHaveLength(2);
     expect(scripts[1].getAttribute("src")).toBe(null);
     expect(scripts[1].text).toContain("__dashMounted");
   });
 
   test("html board inline scripts actually run in the host DOM (D18)", async () => {
-    render(<BoardView id="b-html" />);
+    const container = render(<BoardView id="b-html" />);
     await act(async () => {});
+    const src = container.querySelector(
+      "div.board-content script[src]",
+    ) as HTMLScriptElement;
+    await act(async () => {
+      src.dispatchEvent(new Event("load"));
+    });
     expect(
       (window as unknown as { __dashMounted?: boolean }).__dashMounted,
     ).toBe(true);

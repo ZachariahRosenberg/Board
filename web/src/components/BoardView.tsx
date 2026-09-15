@@ -129,9 +129,11 @@ export function BoardView({ id }: { id: string }) {
 
   // D18: html boards mount into the host DOM like markdown — the document is
   // parsed, head styles and body children are injected, and scripts are
-  // re-created so they actually run (innerHTML would not execute them).
-  // Declared before the affordance effects so the content DOM exists when
-  // their listeners bind.
+  // re-created so they actually run (innerHTML would not execute them). The
+  // mount is async: external scripts are awaited in document order so inline
+  // code never races its dependencies; a version switch mid-mount aborts the
+  // old sequence (its scripts are detached and never fire). Declared before
+  // the affordance effects so the content DOM exists when they bind.
   useEffect(() => {
     const root = containerRef.current;
     if (
@@ -142,7 +144,7 @@ export function BoardView({ id }: { id: string }) {
     ) {
       return;
     }
-    mountBoardDocument(version.content, root);
+    void mountBoardDocument(version.content, root);
   }, [version, data]);
 
   // Live updates (SSE): any event for this board refreshes comments; board

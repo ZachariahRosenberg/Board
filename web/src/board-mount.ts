@@ -4,17 +4,45 @@
 // document cannot go through innerHTML (its <script> elements would never
 // execute), so this module parses the stored document and mounts it by hand:
 // the head's styles (board templates keep their CSS in <head>), the body's
-// children, then a pass that re-creates every script element in place — a
+// children, then a sequential pass that re-creates every script element — a
 // fresh element the browser actually evaluates. What those scripts may reach
 // is still bounded by the host CSP (daemon.ts hostSecurityHeaders);
 // connect-src 'self' remains the exfiltration kill-switch.
 
-export function mountBoardDocument(
+interface RecordedScript {
+  src: string | null;
+  text: string;
+}
+
+export async function mountBoardDocument(
   content: string,
   container: HTMLElement,
-): void {
+): Promise<void> {
   const doc = new DOMParser().parseFromString(content, "text/html");
   const owner = container.ownerDocument;
+
+  // Scripts are RECORDED and stripped before anything enters the DOM, for
+  // two reasons a plain append would get wrong:
+  // 1. a script parsed in an inert document (DOMParser) is never marked
+  //    "already started", so inserting the original into the live document
+  //    would execute it — and then the re-created copy would execute it AGAIN
+  //    (double wiring, double charts). Originals never enter the DOM.
+  // 2. head scripts (templates load /libs libs from <head>) must survive the
+  //    mount — a styles-only head pass silently dropped them, which is half
+  //    of the dogfooded "Chart is not defined".
+  // Head first, then body: document order.
+  const recorded: RecordedScript[] = [];
+  const strip = (el: Element): void => {
+    recorded.push({ src: el.getAttribute("src"), text: el.textContent ?? "" });
+    el.remove();
+  };
+  for (const el of [...doc.head.querySelectorAll("script")]) {
+    strip(el);
+  }
+  for (const el of [...doc.body.querySelectorAll("script")]) {
+    strip(el);
+  }
+
   container.textContent = "";
   for (const el of [
     ...doc.head.querySelectorAll("style, link[rel='stylesheet']"),
@@ -24,22 +52,31 @@ export function mountBoardDocument(
   for (const child of [...doc.body.childNodes]) {
     container.append(owner.adoptNode(child.cloneNode(true)));
   }
-  remountScripts(container);
-}
 
-// innerHTML / adoptNode do not (re)execute scripts: a script element only
-// runs when the parser inserts it or when it is created fresh and inserted.
-// Replace every script in place, copying attributes, forcing async=false so
-// external scripts keep document order.
-function remountScripts(container: HTMLElement): void {
-  const owner = container.ownerDocument;
-  for (const stale of [...container.querySelectorAll("script")]) {
+  // Re-create scripts in document order at the container end. External
+  // scripts are AWAITED before the next one is created: an inline script
+  // must never run before its dependency is defined (the other half of the
+  // dogfooded "Chart is not defined" — async=false only orders externals
+  // among themselves, never against inline code). A script left detached by
+  // a version switch means this mount was superseded — abort the sequence
+  // rather than execute into the replaced document.
+  for (const record of recorded) {
     const fresh = owner.createElement("script");
-    for (const attr of [...stale.attributes]) {
-      fresh.setAttribute(attr.name, attr.value);
+    if (record.src !== null) {
+      fresh.setAttribute("src", record.src);
+      container.append(fresh);
+      await new Promise<void>((resolve) => {
+        fresh.addEventListener("load", () => resolve(), { once: true });
+        fresh.addEventListener("error", () => resolve(), { once: true });
+      });
+      if (!fresh.isConnected) {
+        return;
+      }
+    } else {
+      // a fresh, connected script with text content executes the moment it
+      // is inserted — that IS the mechanism (innerHTML would not do this)
+      fresh.text = record.text;
+      container.append(fresh);
     }
-    fresh.async = false;
-    fresh.text = stale.textContent ?? "";
-    stale.replaceWith(fresh);
   }
 }
