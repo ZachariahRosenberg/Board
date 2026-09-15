@@ -311,6 +311,15 @@ export function BoardView({ id }: { id: string }) {
       : `${originUrl}/b/${board.id}/${selected}${
           frameFragment === null ? "" : `#${encodeURIComponent(frameFragment)}`
         }`;
+  // html boards: hover affordances can't see into the iframe (the wall doing
+  // its job), so section-comment creation goes through a picker fed by the
+  // version's publish-time anchors. Markdown boards keep their affordances.
+  const sectionOptions =
+    board.format !== "html" || selected === null
+      ? []
+      : (data.versions.find((meta) => meta.n === selected)?.anchors ?? []).map(
+          (a) => ({ id: a.id, label: a.label }),
+        );
   return (
     <div className="board-view">
       <header className="board-header">
@@ -378,6 +387,7 @@ export function BoardView({ id }: { id: string }) {
           versionN={selected}
           refreshKey={refreshKey}
           pendingAnchor={pendingAnchor}
+          sectionOptions={sectionOptions}
           onPendingAnchorConsumed={() => {
             setPendingAnchor(null);
           }}

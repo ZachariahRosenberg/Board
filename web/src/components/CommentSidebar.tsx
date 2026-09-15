@@ -24,9 +24,12 @@ interface CommentSidebarProps {
   versionN: number | null;
   refreshKey: number;
   pendingAnchor: Anchor | null;
+  // html boards: publish-time anchors of the viewed version, offered through
+  // the "+ section" picker (in-frame hovers are invisible to the host)
+  sectionOptions?: { id: string; label?: string }[];
   onPendingAnchorConsumed(): void;
   onHighlight(anchor: Anchor): void;
-  onSwitchVersion(version: number): void;
+  onSwitchVersion(n: number): void;
 }
 
 function authorLabel(author: string): string {
@@ -40,6 +43,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [hideResolved, setHideResolved] = useState(false);
+  const [sectionPickerOpen, setSectionPickerOpen] = useState(false);
 
   const boardOpen = props.boardStatus === "open";
 
@@ -64,6 +68,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     if (props.pendingAnchor !== null) {
       setComposer({ anchor: props.pendingAnchor, replyTo: null });
       setBody("");
+      setSectionPickerOpen(false);
       props.onPendingAnchorConsumed();
     }
   }, [props.pendingAnchor]);
@@ -173,7 +178,40 @@ export function CommentSidebar(props: CommentSidebarProps) {
             {hideResolved ? "show resolved" : "hide resolved"}
           </button>
         )}
+        {(props.sectionOptions ?? []).length > 0 && boardOpen && (
+          <button
+            type="button"
+            className="pill"
+            onClick={() => {
+              setSectionPickerOpen((value) => !value);
+            }}
+          >
+            + section
+          </button>
+        )}
       </header>
+      {sectionPickerOpen && (
+        <div className="section-picker">
+          <div className="small">comment on a section:</div>
+          {(props.sectionOptions ?? []).map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              className="section-option"
+              onClick={() => {
+                setComposer({
+                  anchor: { type: "section", section_id: opt.id },
+                  replyTo: null,
+                });
+                setBody("");
+                setSectionPickerOpen(false);
+              }}
+            >
+              {opt.label ?? opt.id}
+            </button>
+          ))}
+        </div>
+      )}
       {error !== null && <div className="error">{error}</div>}
       {!boardOpen && (
         <div className="notice small">Board ended — read-only.</div>

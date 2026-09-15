@@ -607,6 +607,59 @@ describe("CommentSidebar", () => {
     expect(container.innerHTML).toContain("✓ resolved");
   });
 
+  test("section picker: html-board section options open an anchored composer", async () => {
+    const container = render(
+      <CommentSidebar
+        boardId="bhtml"
+        boardStatus="open"
+        versionN={1}
+        refreshKey={0}
+        pendingAnchor={null}
+        sectionOptions={[
+          { id: "s-header", label: "Header" },
+          { id: "s-form", label: "Choices form" },
+        ]}
+        onPendingAnchorConsumed={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const open = [...container.querySelectorAll("button.pill")].find(
+      (button) => button.textContent === "+ section",
+    ) as HTMLElement;
+    await act(async () => {
+      open.click();
+    });
+    const option = [
+      ...container.querySelectorAll("button.section-option"),
+    ].find((button) => button.textContent === "Choices form") as HTMLElement;
+    await act(async () => {
+      option.click();
+    });
+    expect(container.innerHTML).toContain("on section s-form");
+    expect(container.querySelector("textarea")).not.toBe(null);
+    // picker folds away once a section is chosen
+    expect(container.querySelectorAll("button.section-option")).toHaveLength(0);
+  });
+
+  test("no section picker without section options (markdown affordances cover it)", async () => {
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    expect(container.innerHTML).not.toContain("+ section");
+  });
+
   test("pendingAnchor opens the composer with the anchor chip and quote", async () => {
     createdComments.length = 0;
     const container = render(

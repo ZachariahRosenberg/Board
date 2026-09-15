@@ -97,20 +97,20 @@
 
   // the form: pure in-frame state, submits nothing
   var votes = {};
-  document.getElementById("vote").addEventListener("click", function () {
+  document.getElementById("vote").addEventListener("click", () => {
     var choice = document.querySelector('input[name="lib"]:checked');
     if (!choice) return;
     votes[choice.value] = (votes[choice.value] || 0) + 1;
-    var total = Object.values(votes).reduce(function (a, b) { return a + b; }, 0);
+    var total = Object.values(votes).reduce((a, b) => a + b, 0);
     var tally = document.getElementById("tally");
     tally.hidden = false;
     tally.innerHTML = "";
-    Object.keys(votes).sort().forEach(function (key) {
+    Object.keys(votes).sort().forEach((key) => {
       var row = document.createElement("div");
       var bar = document.createElement("span");
       bar.className = "bar";
-      bar.style.width = Math.round((votes[key] / total) * 220) + "px";
-      row.textContent = key + ": " + votes[key];
+      bar.style.width = `${Math.round((votes[key] / total) * 220)}px`;
+      row.textContent = `${key}: ${votes[key]}`;
       row.appendChild(bar);
       tally.appendChild(row);
     });

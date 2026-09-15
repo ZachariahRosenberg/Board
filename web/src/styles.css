@@ -539,6 +539,39 @@ body {
   border-radius: 4px;
 }
 
+/* html boards: the "+ section" picker (in-frame hovers are invisible to the host) */
+.section-picker {
+  margin: 10px 12px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-element);
+}
+
+.section-picker .small {
+  margin-bottom: 6px;
+  color: var(--fg-muted);
+}
+
+.section-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  margin: 2px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.section-option:hover {
+  background: var(--bg-element);
+  color: var(--primary);
+}
+
 /* a text anchor whose quote no longer exists in the current version —
    the section is the best remaining target, badged so it reads as moved */
 .board-content .anchor-moved {
