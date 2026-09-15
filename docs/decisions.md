@@ -61,3 +61,9 @@ ADR-style, oldest first. Entries are append-only: superseding a decision adds a 
 - **Context:** Daemon lifecycle could be auto-spawned magic or explicit commands.
 - **Decision (user):** `make serve/open/list/token/install/test/dev/export/import` wrapping a thin `board` CLI; no auto-spawn.
 - **Consequences:** Predictable, greppable ops; systemd/tmux documented but optional.
+
+## D11 — Patched happy-dom for DOMPurify correctness — 2026-09-15
+
+- **Context:** Server-side markdown sanitization (invariant 6) runs DOMPurify against a happy-dom window. Under the pinned versions (happy-dom 20.x, dompurify 3.4.x) two happy-dom bugs silently break sanitization: the base `Node.prototype.nodeName` getter returns `""` (every element classifies as tag `""` and gets stripped, hoisting script content into text), and `NodeIterator` stops after the first mid-walk removal (everything following a removed node escapes sanitization).
+- **Decision:** Ship two minimal, why-commented compatibility patches in `server/src/render.ts` — a receiver-correct spec `nodeName` getter and a removal-robust pre-order `createNodeIterator` replacement installed on the exact document DOMPurify caches from — guarded by the golden-document render test and adversarial mXSS-shaped probes.
+- **Consequences:** Sanitization is actually correct under Bun today; the patches are coupled to DOMPurify's caching internals, so any `bun update` of dompurify/happy-dom must re-run the render suite (the probes fail loudly if the patches stop applying). Revisit when either library fixes the underlying bugs.

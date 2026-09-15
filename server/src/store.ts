@@ -372,9 +372,8 @@ export interface RestoreVersionInput {
 }
 
 // Restore republishes an old version as a new one — history stays linear; the
-// stored document is copied verbatim (no re-render). Deliberately permitted on
-// ended boards: the wave-2a lifecycle ends with board.restored after
-// board.ended; plan.md's "writes -> 409" applies to publishes.
+// stored document is copied verbatim (no re-render). Like every write, restore
+// is rejected once the board is ended (docs/plan.md: end → writes 409).
 export async function restoreVersion(
   db: Database,
   dataDir: string,
@@ -384,6 +383,9 @@ export async function restoreVersion(
   const board = getBoard(db, boardId);
   if (board === null) {
     throw new BoardNotFound(boardId);
+  }
+  if (board.status !== "open") {
+    throw new BoardEnded(boardId);
   }
   if (input.expected_version !== board.current_version) {
     throw new VersionConflict(

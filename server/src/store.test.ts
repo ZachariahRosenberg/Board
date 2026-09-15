@@ -184,34 +184,6 @@ describe("board lifecycle run", () => {
     ).rejects.toBeInstanceOf(BoardNotFound);
   });
 
-  test("endBoard marks the board ended and refreshes board.json", () => {
-    const ended = endBoard(db, dataDir, board.id, "human");
-    expect(ended.status).toBe("ended");
-    expect(getBoard(db, board.id)?.status).toBe("ended");
-    const snapshot = JSON.parse(
-      readFileSync(join(boardDir(), "board.json"), "utf8"),
-    ) as Board;
-    expect(snapshot.status).toBe("ended");
-  });
-
-  test("publishVersion to an ended board throws BoardEnded even with a stale expected_version", async () => {
-    expect(
-      publishVersion(db, dataDir, board.id, {
-        format: "markdown",
-        content: MD_V2,
-        expected_version: 0,
-        actor: "agent-1",
-      }),
-    ).rejects.toBeInstanceOf(BoardEnded);
-  });
-
-  test("endBoard on an already-ended board throws BoardEnded without a second event", () => {
-    expect(() => endBoard(db, dataDir, board.id, "human")).toThrow(BoardEnded);
-    expect(
-      getEvents(db).filter((ev) => ev.type === "board.ended"),
-    ).toHaveLength(1);
-  });
-
   test("restoreVersion republishes v1 as v3 with a restore label", async () => {
     const v3 = await restoreVersion(db, dataDir, board.id, {
       from_n: 1,
@@ -250,13 +222,51 @@ describe("board lifecycle run", () => {
     ).rejects.toBeInstanceOf(VersionConflict);
   });
 
-  test("the run's event sequence is exactly [created, published, published, ended, restored]", () => {
+  test("endBoard marks the board ended and refreshes board.json", () => {
+    const ended = endBoard(db, dataDir, board.id, "human");
+    expect(ended.status).toBe("ended");
+    expect(getBoard(db, board.id)?.status).toBe("ended");
+    const snapshot = JSON.parse(
+      readFileSync(join(boardDir(), "board.json"), "utf8"),
+    ) as Board;
+    expect(snapshot.status).toBe("ended");
+  });
+
+  test("publishVersion to an ended board throws BoardEnded even with a stale expected_version", async () => {
+    expect(
+      publishVersion(db, dataDir, board.id, {
+        format: "markdown",
+        content: MD_V2,
+        expected_version: 0,
+        actor: "agent-1",
+      }),
+    ).rejects.toBeInstanceOf(BoardEnded);
+  });
+
+  test("restoreVersion on an ended board throws BoardEnded even with a stale expected_version", async () => {
+    expect(
+      restoreVersion(db, dataDir, board.id, {
+        from_n: 1,
+        expected_version: 0,
+        actor: "human",
+      }),
+    ).rejects.toBeInstanceOf(BoardEnded);
+  });
+
+  test("endBoard on an already-ended board throws BoardEnded without a second event", () => {
+    expect(() => endBoard(db, dataDir, board.id, "human")).toThrow(BoardEnded);
+    expect(
+      getEvents(db).filter((ev) => ev.type === "board.ended"),
+    ).toHaveLength(1);
+  });
+
+  test("the run's event sequence is exactly [created, published, published, restored, ended]", () => {
     expect(getEvents(db).map((ev) => ev.type)).toEqual([
       "board.created",
       "board.published",
       "board.published",
-      "board.ended",
       "board.restored",
+      "board.ended",
     ]);
   });
 
