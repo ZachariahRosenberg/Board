@@ -112,6 +112,19 @@ export function getVersion(id: string, n: number): Promise<Version> {
   return apiFetch<Version>(`/api/boards/${id}/versions/${n}`);
 }
 
+// The board-origin URL moves with config (BOARD_ORIGIN_PORT), so the SPA
+// learns it from the daemon at runtime — cached once per page load. Unauthenticated
+// on the server: the URL is loopback-bound (invariant 1) and already in the
+// host CSP's frame-src.
+let originUrlPromise: Promise<string> | null = null;
+
+export function getOriginUrl(): Promise<string> {
+  originUrlPromise ??= apiFetch<{ url: string }>("/api/origin").then(
+    (body) => body.url,
+  );
+  return originUrlPromise;
+}
+
 export interface CreateCommentInput {
   anchor: Comment["anchor"];
   body: string;

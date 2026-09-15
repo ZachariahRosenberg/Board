@@ -40,6 +40,23 @@ describe("host server (api)", () => {
   });
 });
 
+describe("GET /api/origin", () => {
+  test("returns the daemon's live board-origin URL, unauthenticated", async () => {
+    const s = server();
+    const res = await s.api.get("/api/origin");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(await res.json()).toEqual({ url: s.originUrl });
+  });
+
+  test("wrong method returns 405 with an Allow header", async () => {
+    const res = await server().api.post("/api/origin", {});
+    expect(res.status).toBe(405);
+    expect(await errorCode(res)).toBe("method_not_allowed");
+    expect(res.headers.get("allow")).toBe("GET");
+  });
+});
+
 describe("binding", () => {
   test("both servers bind 127.0.0.1 on distinct ephemeral ports and answer", async () => {
     const s = server();

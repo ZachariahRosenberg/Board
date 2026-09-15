@@ -10,3 +10,8 @@ docs/security.md).
 - Chart.js v4.4.9 — UMD minified build (`dist/chart.umd.js` from
   https://registry.npmjs.org/chart.js/-/chart.js-4.4.9.tgz), served as
   `chart-4.4.9.umd.min.js`. MIT — see LICENSE.txt.
+- board bootstrap v1 — our own small vanilla script (`board-bootstrap-1.js`,
+  version-stamped like the vendored libs, MIT — see LICENSE.txt). Boards include
+  it at their own choice to react to URL fragments (`#<data-ba id>`): it scrolls
+  the anchored element to frame center and outlines it. No network calls, no
+  dependencies, no postMessage (that's the v1.1 bridge).

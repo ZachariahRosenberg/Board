@@ -233,6 +233,17 @@ body {
   line-height: 1.65;
 }
 
+/* html boards render as sandboxed origin iframes (docs/security.md "Sandbox
+   architecture") — same frame aesthetic as .board-content */
+.board-frame {
+  display: block;
+  width: 100%;
+  min-height: 60vh;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
 /* board documents read as documents: serif prose (Source Serif 4), opencode's
    markdown color mapping for headings/links/code/quotes, Fira Code for code */
 .board-content h1,

@@ -26,6 +26,7 @@ interface CommentSidebarProps {
   pendingAnchor: Anchor | null;
   onPendingAnchorConsumed(): void;
   onHighlight(anchor: Anchor): void;
+  onSwitchVersion(version: number): void;
 }
 
 function authorLabel(author: string): string {
@@ -195,7 +196,9 @@ export function CommentSidebar(props: CommentSidebarProps) {
               root={thread}
               replies={repliesOf(thread)}
               boardOpen={boardOpen}
+              versionN={props.versionN}
               onHighlight={props.onHighlight}
+              onSwitchVersion={props.onSwitchVersion}
               onResolve={(commentId) => {
                 void resolve(commentId);
               }}
@@ -270,7 +273,9 @@ interface ThreadViewProps {
   root: Comment;
   replies: Comment[];
   boardOpen: boolean;
+  versionN: number | null;
   onHighlight(anchor: Anchor): void;
+  onSwitchVersion(version: number): void;
   onResolve(commentId: string): void;
   onReply(comment: Comment): void;
 }
@@ -296,6 +301,20 @@ function ThreadView(props: ThreadViewProps) {
           {authorLabel(root.author)}
         </span>
         <span>{formatDate(root.created_at)}</span>
+        {/* a thread pinned to another version gets an escape hatch back to
+            the version it was written against (html boards re-aim via src,
+            markdown boards re-anchor via quote match) */}
+        {props.versionN !== null && root.version_n !== props.versionN && (
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => {
+              props.onSwitchVersion(root.version_n);
+            }}
+          >
+            on v{root.version_n}
+          </button>
+        )}
         {root.resolved_at !== null ? (
           <span className="resolved-mark">
             ✓ resolved by {authorLabel(root.resolved_by ?? "")}

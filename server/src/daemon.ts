@@ -19,6 +19,7 @@ import { boardRoutes } from "./routes/boards.ts";
 import { commentRoutes } from "./routes/comments.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { healthRoute } from "./routes/health.ts";
+import { originRoute, originUrlRef } from "./routes/origin.ts";
 import {
   matchPath,
   matchRoute,
@@ -56,6 +57,7 @@ export interface DaemonOptions {
 
 const routes: Route[] = [
   healthRoute,
+  originRoute,
   ...sessionRoutes,
   ...boardRoutes,
   ...commentRoutes,
@@ -587,14 +589,15 @@ export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
     db.close();
     throw err;
   }
-  webHeaders.headers = hostSecurityHeaders(
-    originUrlFor(config.host, boundPort(originServer)),
-  );
+  const originUrl = originUrlFor(config.host, boundPort(originServer));
+  webHeaders.headers = hostSecurityHeaders(originUrl);
+  // feeds GET /api/origin — the SPA's runtime discovery of this URL
+  originUrlRef.url = originUrl;
   return {
     hostServer,
     originServer,
     hostUrl: originUrlFor(config.host, boundPort(hostServer)),
-    originUrl: originUrlFor(config.host, boundPort(originServer)),
+    originUrl,
     db,
     stop: async () => {
       await hostServer.stop(true);

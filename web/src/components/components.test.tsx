@@ -37,6 +37,7 @@ mock.module("mermaid", () => ({
 
 const versionCalls: Array<[string, number]> = [];
 const exchangeCalls: string[] = [];
+const ORIGIN = "http://127.0.0.1:7801";
 
 const MD_BOARD: Board & { unresolved_comments: number } = {
   id: "b1",
@@ -158,6 +159,7 @@ mock.module("../api.ts", () => ({
     versionCalls.push([id, n]);
     return MD_VERSION;
   },
+  getOriginUrl: async () => ORIGIN,
   exchange: async (token: string) => {
     exchangeCalls.push(token);
     return `session-for-${token}`;
@@ -258,13 +260,62 @@ describe("BoardView", () => {
     ]);
   });
 
-  test("html-format boards show the M4 notice and never inject", async () => {
-    const mermaidBefore = mermaidRunCalls.length;
+  test("html board renders the sandboxed origin iframe with the exact locked attribute set", async () => {
     const container = render(<BoardView id="b-html" />);
     await act(async () => {});
-    expect(container.innerHTML).toContain("starting with M4");
-    expect(container.querySelector("div.board-content")).toBe(null);
-    expect(mermaidRunCalls.length - mermaidBefore).toBe(0);
+    const frame = container.querySelector("iframe.board-frame");
+    expect(frame).not.toBe(null);
+    // the embed shape is pinned byte-for-byte by docs/security.md — ONLY
+    // allow-scripts, never allow-same-origin or friends (invariant 2)
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("allow")).toBe("");
+    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(frame?.getAttribute("title")).toBe("Dashboard");
+    expect(frame?.getAttribute("src")).toBe(`${ORIGIN}/b/b-html/2`);
+  });
+
+  test("markdown boards render no iframe", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    expect(container.querySelector("iframe")).toBe(null);
+    expect(container.querySelector("div.board-content")).not.toBe(null);
+  });
+
+  test("switching versions recomputes the iframe src", async () => {
+    const container = render(<BoardView id="b-html" />);
+    await act(async () => {});
+    expect(
+      container.querySelector("iframe.board-frame")?.getAttribute("src"),
+    ).toBe(`${ORIGIN}/b/b-html/2`);
+    const pill = container.querySelector(
+      "nav.version-switcher button.pill",
+    ) as HTMLElement;
+    await act(async () => {
+      pill.click();
+    });
+    expect(
+      container.querySelector("iframe.board-frame")?.getAttribute("src"),
+    ).toBe(`${ORIGIN}/b/b-html/1`);
+  });
+
+  test("highlighting an anchor on an html board aims the iframe fragment", async () => {
+    const container = render(<BoardView id="b-html" />);
+    await act(async () => {});
+    // second thread chip is the section anchor (section b1) — cm1 is text
+    const chips = container.querySelectorAll("button.anchor-chip.clickable");
+    await act(async () => {
+      (chips[1] as HTMLElement).click();
+    });
+    expect(
+      container.querySelector("iframe.board-frame")?.getAttribute("src"),
+    ).toBe(`${ORIGIN}/b/b-html/2#b1`);
+    // a text anchor aims at its section fragment (best in-frame target)
+    await act(async () => {
+      (chips[0] as HTMLElement).click();
+    });
+    expect(
+      container.querySelector("iframe.board-frame")?.getAttribute("src"),
+    ).toBe(`${ORIGIN}/b/b-html/2#b2`);
   });
 
   test("selection affordance survives the pointer crossing sections and opens the composer", async () => {
@@ -473,6 +524,7 @@ describe("CommentSidebar", () => {
         onHighlight={(anchor) => {
           highlightCalls.push(anchor);
         }}
+        onSwitchVersion={() => {}}
       />,
     );
     await act(async () => {});
@@ -508,6 +560,7 @@ describe("CommentSidebar", () => {
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
         onHighlight={() => {}}
+        onSwitchVersion={() => {}}
       />,
     );
     await act(async () => {});
@@ -531,6 +584,7 @@ describe("CommentSidebar", () => {
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
         onHighlight={() => {}}
+        onSwitchVersion={() => {}}
       />,
     );
     await act(async () => {});
@@ -564,6 +618,7 @@ describe("CommentSidebar", () => {
         pendingAnchor={TEXT_ANCHOR}
         onPendingAnchorConsumed={() => {}}
         onHighlight={() => {}}
+        onSwitchVersion={() => {}}
       />,
     );
     await act(async () => {});
@@ -591,6 +646,7 @@ describe("CommentSidebar", () => {
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
         onHighlight={() => {}}
+        onSwitchVersion={() => {}}
       />,
     );
     await act(async () => {});
@@ -622,6 +678,7 @@ describe("CommentSidebar", () => {
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
         onHighlight={() => {}}
+        onSwitchVersion={() => {}}
       />,
     );
     await act(async () => {});
@@ -630,6 +687,54 @@ describe("CommentSidebar", () => {
     expect(
       [...container.querySelectorAll("button.linklike")].map(
         (button) => button.textContent,
+      ),
+    ).toEqual([]);
+  });
+
+  test("a thread pinned to another version gets an on v<n> jump that switches versions", async () => {
+    const switchCalls: number[] = [];
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={1}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={(n) => {
+          switchCalls.push(n);
+        }}
+      />,
+    );
+    await act(async () => {});
+    const jump = [...container.querySelectorAll("button.linklike")].find(
+      (button) => button.textContent === "on v2",
+    );
+    expect(jump).not.toBe(undefined);
+    await act(async () => {
+      (jump as HTMLElement).click();
+    });
+    expect(switchCalls).toEqual([2]);
+  });
+
+  test("no jump affordance when the thread is pinned to the viewed version", async () => {
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    expect(
+      [...container.querySelectorAll("button.linklike")].filter((button) =>
+        (button.textContent ?? "").startsWith("on v"),
       ),
     ).toEqual([]);
   });
