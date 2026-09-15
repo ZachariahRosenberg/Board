@@ -255,7 +255,7 @@ describe("board install tokens", () => {
         }),
       ).toBe(0);
       expect(second.out.join("\n")).toContain(
-        "already installed for opencode (use --force to re-mint)",
+        "already installed for opencode — re-mint with: make install FLAGS=--force (or: bun run cli/src/main.ts install --force)",
       );
       expect(tokenLines(second.out)).toEqual([]);
       rows = db

@@ -370,8 +370,12 @@ function mintToken(
   } catch (err) {
     if (err instanceof TokenNameTaken) {
       // Without --force there is nothing to wire: the plaintext token is
-      // gone (stored hashed, invariant 8), so re-minting is required.
-      io.stdout(`already installed for ${agent} (use --force to re-mint)`);
+      // gone (stored hashed, invariant 8), so re-minting is required. Give
+      // the exact runnable commands — `make install --force` does NOT work
+      // (GNU make eats dash-flags as its own options).
+      io.stdout(
+        `already installed for ${agent} — re-mint with: make install FLAGS=--force (or: bun run cli/src/main.ts install --force)`,
+      );
       return null;
     }
     throw err;

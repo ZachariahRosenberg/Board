@@ -23,7 +23,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 | Task | Command |
 |---|---|
 | Install deps | `make deps` (wraps `bun install`) |
-| Wire agents (MCP + skill + tokens) | `make install` (`--force` via `bun run cli/src/main.ts install --force`) |
+| Wire agents (MCP + skill + tokens) | `make install` (`--force` via `make install FLAGS=--force`) |
 | Test | `make test` (wraps `bun test`) |
 | Typecheck | `bunx tsc --noEmit` |
 | Lint + format | `bunx biome check --write .` |

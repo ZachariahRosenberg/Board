@@ -4,9 +4,10 @@ deps:
 	bun install
 
 # wire the board MCP server into local agents + mint per-agent tokens.
-# GNU make eats dash-flags, so for --force run `bun run cli/src/main.ts install --force`.
+# GNU make eats dash-flags as its own options, so --force goes through a
+# variable: `make install FLAGS=--force`
 install:
-	bun run cli/src/main.ts install $(filter-out $@,$(MAKECMDGOALS))
+	bun run cli/src/main.ts install $(FLAGS)
 
 test:
 	bun test
