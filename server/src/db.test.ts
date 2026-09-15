@@ -48,7 +48,7 @@ describe("openDb", () => {
     db.close();
   });
 
-  test("creates all v1 tables", () => {
+  test("creates all tables across migrations", () => {
     const db = openDb(freshDir());
     const rows = db
       .prepare(
@@ -63,6 +63,7 @@ describe("openDb", () => {
       "events",
       "subscribers",
       "tokens",
+      "sessions",
       "schema_migrations",
     ]) {
       expect(names).toContain(table);
@@ -78,7 +79,7 @@ describe("openDb", () => {
     const migrations = second
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
-    expect(migrations.map((row) => row.version)).toEqual([1]);
+    expect(migrations.map((row) => row.version)).toEqual([1, 2]);
     second.close();
   });
 

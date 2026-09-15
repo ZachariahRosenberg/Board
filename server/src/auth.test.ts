@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { requireAuth } from "./auth.ts";
 import { openDb } from "./db.ts";
 import { HttpError } from "./http.ts";
+import { createExchangeToken, exchangeSession } from "./sessions.ts";
 import { createToken, revokeToken } from "./tokens.ts";
 
 const dirs: string[] = [];
@@ -120,6 +121,61 @@ describe("requireAuth", () => {
       const err = catchUnauthorized(req, db);
       expect(err.message).not.toContain(token);
       expect(`${err.status} ${err.code} ${err.message}`).not.toContain(token);
+    }
+    db.close();
+  });
+});
+
+describe("requireAuth with human sessions", () => {
+  test("a session token authenticates the human actor", () => {
+    const db = freshDb();
+    const exchange = createExchangeToken(db);
+    const session = exchangeSession(db, exchange);
+    const actor = requireAuth(
+      request({ authorization: `Bearer ${session}` }),
+      db,
+    );
+    expect(actor).toEqual({ kind: "human", name: "human" });
+    db.close();
+  });
+
+  test("an unused exchange token does not authenticate as a Bearer", () => {
+    const db = freshDb();
+    const exchange = createExchangeToken(db);
+    const err = catchUnauthorized(
+      request({ authorization: `Bearer ${exchange}` }),
+      db,
+    );
+    expect(err.status).toBe(401);
+    expect(err.code).toBe("unauthorized");
+    db.close();
+  });
+
+  test("an invalid session token is rejected with 401 as before", () => {
+    const db = freshDb();
+    const err = catchUnauthorized(
+      request({ authorization: "Bearer not-a-session-token" }),
+      db,
+    );
+    expect(err.status).toBe(401);
+    expect(err.code).toBe("unauthorized");
+    db.close();
+  });
+
+  test("session failure messages never echo the token value (invariant 8)", () => {
+    const db = freshDb();
+    const exchange = createExchangeToken(db);
+    const session = exchangeSession(db, exchange);
+    const cases = [
+      request({ authorization: `Bearer ${session}-wrong` }),
+      request({ authorization: `Bearer ${exchange}` }),
+      request({ authorization: `Basic ${session}` }),
+    ];
+    for (const req of cases) {
+      const err = catchUnauthorized(req, db);
+      expect(err.message).not.toContain(session);
+      expect(err.message).not.toContain(exchange);
+      expect(`${err.status} ${err.code} ${err.message}`).not.toContain(session);
     }
     db.close();
   });

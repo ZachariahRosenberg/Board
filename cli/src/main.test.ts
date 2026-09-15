@@ -49,6 +49,32 @@ describe("board cli", () => {
     expect(proc.stderr).toBe("");
   });
 
+  test("subprocess: board open prints a one-time exchange URL on the default port", () => {
+    const dir = freshDir();
+    const proc = runCli(["open"], { BOARD_DATA_DIR: dir });
+    expect(proc.exitCode).toBe(0);
+    const url = proc.stdout.trim();
+    expect(url).toMatch(
+      /^http:\/\/127\.0\.0\.1:7800\/\?token=[A-Za-z0-9_-]{43}$/,
+    );
+    const token = /\?token=([A-Za-z0-9_-]{43})/.exec(url)?.[1] ?? "";
+    expect(token).not.toBe("");
+    expect(proc.stdout.split(token)).toHaveLength(2);
+    expect(proc.stderr).not.toContain(token);
+  });
+
+  test("subprocess: board open <ID> deep-links to the board", () => {
+    const dir = freshDir();
+    const proc = runCli(["open", "ab12cd34ef"], { BOARD_DATA_DIR: dir });
+    expect(proc.exitCode).toBe(0);
+    const url = proc.stdout.trim();
+    expect(url).toMatch(
+      /^http:\/\/127\.0\.0\.1:7800\/\?token=[A-Za-z0-9_-]{43}#\/boards\/ab12cd34ef$/,
+    );
+    const token = /\?token=([A-Za-z0-9_-]{43})/.exec(url)?.[1] ?? "";
+    expect(proc.stderr).not.toContain(token);
+  });
+
   test("--help and bare invocation print usage listing every command", () => {
     for (const args of [[], ["--help"]]) {
       const proc = runCli(args);

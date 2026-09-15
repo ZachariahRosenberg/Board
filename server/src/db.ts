@@ -78,6 +78,22 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       );
     `,
   },
+  {
+    // docs/security.md "human browser session": one-time exchange tokens minted
+    // by `board open` and the resulting browser sessions. Only sha256 lives
+    // here — plaintext exists solely in the minting call's return (invariant 8).
+    version: 2,
+    sql: `
+      CREATE TABLE sessions (
+        token_hash TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('exchange', 'session')),
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        used_at TEXT,
+        board_id TEXT
+      );
+    `,
+  },
 ];
 
 export function openDb(dataDir: string): Database {

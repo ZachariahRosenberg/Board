@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { existsSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { requireAuth } from "./auth.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
@@ -21,6 +23,7 @@ import {
   type Route,
   routeRequiresAuth,
 } from "./routes/route.ts";
+import { sessionRoutes } from "./routes/session.ts";
 import {
   BoardEnded,
   BoardNotFound,
@@ -38,7 +41,18 @@ export interface Daemon {
   stop(): Promise<void>;
 }
 
-const routes: Route[] = [healthRoute, ...boardRoutes, ...eventRoutes];
+export interface DaemonOptions {
+  // Where resolveWebDist starts walking to find the repo root; the test seam
+  // for pointing the daemon at a fixture web/dist.
+  webRootHint?: string;
+}
+
+const routes: Route[] = [
+  healthRoute,
+  ...sessionRoutes,
+  ...boardRoutes,
+  ...eventRoutes,
+];
 
 // Board-origin CSP allowlist from docs/security.md — never widen it (invariant 3); connect-src 'none' is the exfiltration kill switch. frame-ancestors is derived from the actual host origin at boot.
 const BOARD_CSP_DIRECTIVES = [
@@ -72,10 +86,162 @@ export function boardSecurityHeaders(
   };
 }
 
-function originUrlFor(host: string, port: number): string {
+// Host-app CSP from docs/security.md, exact. The board-origin URL is derived
+// from the actual bound origin port at boot (mirroring how the board CSP
+// derives frame-ancestors), so the two origins always agree in dev and tests.
+export function hostSecurityHeaders(originUrl: string): Record<string, string> {
+  return {
+    "content-security-policy": [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      `img-src 'self' data: ${originUrl}`,
+      "connect-src 'self'",
+      `frame-src ${originUrl}`,
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'none'",
+    ].join("; "),
+    "x-content-type-options": "nosniff",
+  };
+}
+
+export function originUrlFor(host: string, port: number): string {
   const hostname =
     host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return `http://${hostname}:${port}`;
+}
+
+// The SPA is built static files under web/dist. The daemon locates the repo
+// root by walking up from daemon.ts (or a caller-supplied hint) until it sees
+// package.json + Makefile, so it never needs a configured web path. rootHint
+// is the seam tests use to point at a fixture tree.
+export function resolveWebDist(rootHint?: string): string {
+  let dir = rootHint ?? import.meta.dir;
+  for (;;) {
+    if (
+      existsSync(join(dir, "package.json")) &&
+      existsSync(join(dir, "Makefile"))
+    ) {
+      return join(dir, "web", "dist");
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error(
+        `could not locate the board repo root (package.json + Makefile) starting from ${
+          rootHint ?? import.meta.dir
+        }`,
+      );
+    }
+    dir = parent;
+  }
+}
+
+// Small explicit map (not Bun.file's sniffing) so header values are pinned by
+// tests and never pick up charset quirks per environment.
+const MIME_BY_EXTENSION: Record<string, string> = {
+  css: "text/css; charset=utf-8",
+  htm: "text/html; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  ico: "image/x-icon",
+  js: "text/javascript; charset=utf-8",
+  json: "application/json",
+  map: "application/json",
+  mjs: "text/javascript; charset=utf-8",
+  png: "image/png",
+  svg: "image/svg+xml",
+  txt: "text/plain; charset=utf-8",
+  woff2: "font/woff2",
+};
+
+function contentTypeFor(path: string): string {
+  const dot = path.lastIndexOf(".");
+  const ext = dot === -1 ? "" : path.slice(dot + 1).toLowerCase();
+  // Unknown extensions stay octet-stream: never guess an active type.
+  return MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
+}
+
+function decodeSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // malformed percent-escape: keep the raw segment rather than 500ing
+    return value;
+  }
+}
+
+// URL pathname → relative path inside web/dist. Segments are decoded first
+// (assets can carry %20 etc.), then anything that could escape the dist dir —
+// dot segments, embedded separators, NUL — rejects outright.
+function staticRelativePath(pathname: string): string | null {
+  const segments: string[] = [];
+  for (const raw of pathname.split("/")) {
+    if (raw.length === 0) {
+      continue;
+    }
+    const segment = decodeSegment(raw);
+    if (
+      segment === "." ||
+      segment === ".." ||
+      segment.includes("/") ||
+      segment.includes("\\") ||
+      segment.includes("\0")
+    ) {
+      return null;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/");
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function staticFileResponse(
+  path: string,
+  headers: Record<string, string>,
+): Response {
+  return new Response(Bun.file(path), {
+    headers: { ...headers, "content-type": contentTypeFor(path) },
+  });
+}
+
+function hasExtension(rel: string): boolean {
+  return rel.slice(rel.lastIndexOf("/") + 1).includes(".");
+}
+
+// Static serving for the host server: real files, the SPA shell for
+// extensionless unknown paths (hash routing means routes never hit the
+// server), and a pointed 404 when the SPA simply isn't built.
+function serveWebPath(
+  pathname: string,
+  webDist: string,
+  headers: Record<string, string>,
+): Response {
+  if (!existsSync(webDist)) {
+    return jsonError(404, "web_not_built", "run: make web", headers);
+  }
+  const rel = staticRelativePath(pathname);
+  if (rel === null) {
+    return jsonError(404, "not_found", "not found", headers);
+  }
+  const index = join(webDist, "index.html");
+  const candidate = rel.length === 0 ? index : join(webDist, rel);
+  if (isFile(candidate)) {
+    return staticFileResponse(candidate, headers);
+  }
+  if (rel.length === 0 || hasExtension(rel)) {
+    return jsonError(404, "not_found", "not found", headers);
+  }
+  if (isFile(index)) {
+    return staticFileResponse(index, headers);
+  }
+  return jsonError(404, "not_found", "not found", headers);
 }
 
 // StoreError → HTTP translation lives here and nowhere else (style guide):
@@ -157,6 +323,42 @@ async function handleApiRequest(
   }
 }
 
+function isApiPath(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
+// The host server is two servers in one: /api/* through the route table,
+// everything else the built SPA — with the same request hardening.
+async function handleHostRequest(
+  req: Request,
+  config: Config,
+  db: Database,
+  dataDir: string,
+  webDist: string,
+  headers: Record<string, string>,
+): Promise<Response> {
+  const { pathname } = new URL(req.url);
+  if (isApiPath(pathname)) {
+    return handleApiRequest(req, config, db, dataDir);
+  }
+  try {
+    assertAllowedHost(req, config);
+    rejectCrossSite(req);
+    if (req.method !== "GET") {
+      return jsonError(
+        405,
+        "method_not_allowed",
+        `${req.method} is not allowed for static paths`,
+        headers,
+        { allow: "GET" },
+      );
+    }
+    return serveWebPath(pathname, webDist, headers);
+  } catch (err) {
+    return errorResponse(err, headers);
+  }
+}
+
 // Board content routes land in M4; until then everything 404s, but every response still carries the full security header set.
 async function handleBoardOriginRequest(
   req: Request,
@@ -180,14 +382,27 @@ function boundPort(server: Bun.Server<undefined>): number {
   return port;
 }
 
-export function startDaemon(config: Config): Daemon {
+export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
   const db = openDb(config.dataDir);
+  // Placeholder until the origin server binds below: the host CSP embeds the
+  // real origin port. startDaemon is fully synchronous, so no request can be
+  // served before the assignment.
+  const webHeaders: { headers: Record<string, string> } = { headers: {} };
   let hostServer: Bun.Server<undefined>;
   try {
+    const webDist = resolveWebDist(opts.webRootHint);
     hostServer = Bun.serve({
       hostname: config.host,
       port: config.port,
-      fetch: (req) => handleApiRequest(req, config, db, config.dataDir),
+      fetch: (req) =>
+        handleHostRequest(
+          req,
+          config,
+          db,
+          config.dataDir,
+          webDist,
+          webHeaders.headers,
+        ),
     });
   } catch (err) {
     db.close();
@@ -208,6 +423,9 @@ export function startDaemon(config: Config): Daemon {
     db.close();
     throw err;
   }
+  webHeaders.headers = hostSecurityHeaders(
+    originUrlFor(config.host, boundPort(originServer)),
+  );
   return {
     hostServer,
     originServer,

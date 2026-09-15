@@ -73,8 +73,14 @@ export interface TestServer {
   stop(): Promise<void>;
 }
 
+export interface TestServerOptions {
+  // Passed through to startDaemon as the resolveWebDist hint: point static
+  // serving at a fixture web/dist tree.
+  webRootHint?: string;
+}
+
 // Tests never touch the real ~/.board (invariant in AGENTS.md) — always a fresh temp BOARD_DATA_DIR.
-export function startTestServer(): TestServer {
+export function startTestServer(options: TestServerOptions = {}): TestServer {
   const dataDir = mkdtempSync(join(tmpdir(), "board-test-"));
   const config = makeConfig({
     BOARD_DATA_DIR: dataDir,
@@ -82,7 +88,7 @@ export function startTestServer(): TestServer {
     BOARD_PORT: "0",
     BOARD_ORIGIN_PORT: "0",
   });
-  const daemon = startDaemon(config);
+  const daemon = startDaemon(config, { webRootHint: options.webRootHint });
   return {
     dataDir,
     db: daemon.db,

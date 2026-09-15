@@ -2,6 +2,7 @@
 
 import { loadConfig } from "../../server/src/config.ts";
 import { openDb } from "../../server/src/db.ts";
+import { runOpenCommand } from "./commands/open.ts";
 import { runServe } from "./commands/serve.ts";
 import { type CommandIo, runTokenCommand } from "./commands/token.ts";
 
@@ -15,7 +16,7 @@ commands:
   token list           list tokens: name, created, last used, revoked
   token revoke <name>  revoke an agent token
   list                 (not yet implemented)
-  open                 (not yet implemented)
+  open [board id]      open the web UI in a browser (one-time token)
   export               (not yet implemented)
   import               (not yet implemented)
   status               (not yet implemented)
@@ -54,6 +55,21 @@ export function main(argv: string[]): number {
       const db = openDb(config.dataDir);
       try {
         return runTokenCommand({ db, argv: rest, io: consoleIo() });
+      } finally {
+        db.close();
+      }
+    }
+    case "open": {
+      // Same sanctioned local-db path as token: the human's tool.
+      const config = loadConfig();
+      const db = openDb(config.dataDir);
+      try {
+        return runOpenCommand({
+          db,
+          argv: rest,
+          config,
+          io: consoleIo(),
+        });
       } finally {
         db.close();
       }
