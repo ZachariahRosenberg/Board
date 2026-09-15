@@ -32,9 +32,12 @@ import {
   BoardEnded,
   BoardNotFound,
   ContentTooLarge,
+  getBoard,
+  getVersion,
   VersionConflict,
   VersionNotFound,
 } from "./store.ts";
+import { asNonNegativeIntString } from "./validate.ts";
 
 export interface Daemon {
   hostServer: Bun.Server<undefined>;
@@ -118,18 +121,18 @@ export function originUrlFor(host: string, port: number): string {
   return `http://${hostname}:${port}`;
 }
 
-// The SPA is built static files under web/dist. The daemon locates the repo
-// root by walking up from daemon.ts (or a caller-supplied hint) until it sees
-// package.json + Makefile, so it never needs a configured web path. rootHint
-// is the seam tests use to point at a fixture tree.
-export function resolveWebDist(rootHint?: string): string {
+// The daemon locates the repo root by walking up from daemon.ts (or a
+// caller-supplied hint) until it sees package.json + Makefile, so it never
+// needs a configured path. rootHint is the seam tests use to point at a
+// fixture tree.
+export function resolveRepoRoot(rootHint?: string): string {
   let dir = rootHint ?? import.meta.dir;
   for (;;) {
     if (
       existsSync(join(dir, "package.json")) &&
       existsSync(join(dir, "Makefile"))
     ) {
-      return join(dir, "web", "dist");
+      return dir;
     }
     const parent = dirname(dir);
     if (parent === dir) {
@@ -141,6 +144,10 @@ export function resolveWebDist(rootHint?: string): string {
     }
     dir = parent;
   }
+}
+
+export function resolveWebDist(rootHint?: string): string {
+  return join(resolveRepoRoot(rootHint), "web", "dist");
 }
 
 // Small explicit map (not Bun.file's sniffing) so header values are pinned by
@@ -409,15 +416,114 @@ async function handleHostRequest(
   }
 }
 
-// Board content routes land in M4; until then everything 404s, but every response still carries the full security header set.
+// Versions are immutable by design (restoring republishes as a NEW version —
+// never a rewrite), so version documents cache forever.
+const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+
+// Board ids are [A-Za-z0-9]{10} (server/src/ids.ts) — anything else cannot
+// exist and short-circuits to not-found without a db round-trip.
+const BOARD_ID_PATTERN = /^[A-Za-z0-9]{10}$/;
+
+// GET /b/:id/:n serves the stored version document verbatim, no auth: the
+// origin serves public-to-the-browser documents — loopback binding plus the
+// opaque-origin iframe sandbox is the boundary (docs/security.md). Content
+// comes from the db, the source of truth: the bundle file at
+// <dataDir>/boards/<id>/versions/<n>.html is the portable copy, and store.ts
+// already treats a stray file as harmless while a missing db row is not.
+function serveBoardVersion(
+  db: Database,
+  boardId: string,
+  rawN: string,
+  headers: Record<string, string>,
+): Response {
+  if (!BOARD_ID_PATTERN.test(boardId)) {
+    throw new BoardNotFound(boardId);
+  }
+  // same boundary parse as the host's GET /api/boards/:id/versions/:n
+  const n = asNonNegativeIntString(rawN, "n");
+  if (n === undefined) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "n must be a non-negative integer",
+    );
+  }
+  if (getBoard(db, boardId) === null) {
+    throw new BoardNotFound(boardId);
+  }
+  const version = getVersion(db, boardId, n);
+  if (version === null) {
+    throw new VersionNotFound(boardId, n);
+  }
+  return new Response(version.content, {
+    headers: {
+      ...headers,
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": IMMUTABLE_CACHE,
+    },
+  });
+}
+
+// GET /libs/<file> serves the vendored, version-stamped libraries from
+// <repo>/server/origin-libs: the board CSP's script-src 'self' means boards
+// load pinned libs from the origin itself (docs/security.md). Filenames carry
+// the lib version, so an upgrade adds a file and immutable caching can never
+// strand an old board.
+function serveLib(
+  libsDir: string,
+  pathname: string,
+  headers: Record<string, string>,
+): Response {
+  // same decode-then-reject rules as web/dist statics: one flat segment, no
+  // dot segments, no embedded separators
+  const rel = staticRelativePath(pathname.slice("/libs/".length));
+  if (rel === null || rel.includes("/")) {
+    return jsonError(404, "not_found", "not found", headers);
+  }
+  const candidate = join(libsDir, rel);
+  if (!isFile(candidate)) {
+    return jsonError(404, "not_found", "not found", headers);
+  }
+  return staticFileResponse(candidate, {
+    ...headers,
+    "cache-control": IMMUTABLE_CACHE,
+  });
+}
+
+// The board-origin server: sandbox documents (/b/:id/:n) and their pinned
+// vendored libs (/libs/<file>). Every response carries the locked header set —
+// including errors (docs/security.md "Sandbox architecture").
 async function handleBoardOriginRequest(
   req: Request,
   config: Config,
+  db: Database,
+  libsDir: string,
   securityHeaders: Record<string, string>,
 ): Promise<Response> {
   try {
     assertAllowedHost(req, config);
     rejectCrossSite(req);
+    const { pathname } = new URL(req.url);
+    if (req.method !== "GET") {
+      return jsonError(
+        405,
+        "method_not_allowed",
+        `${req.method} is not allowed for ${pathname}`,
+        { ...securityHeaders, allow: "GET" },
+      );
+    }
+    if (pathname.startsWith("/libs/")) {
+      return serveLib(libsDir, pathname, securityHeaders);
+    }
+    const boardMatch = /^\/b\/([^/]+)\/([^/]+)$/.exec(pathname);
+    if (boardMatch !== null) {
+      return serveBoardVersion(
+        db,
+        boardMatch[1] ?? "",
+        boardMatch[2] ?? "",
+        securityHeaders,
+      );
+    }
     return jsonError(404, "not_found", "not found", securityHeaders);
   } catch (err) {
     return errorResponse(err, securityHeaders);
@@ -463,10 +569,18 @@ export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
     const securityHeaders = boardSecurityHeaders(
       originUrlFor(config.host, boundPort(hostServer)),
     );
+    // Vendored pinned libs for sandboxed boards (docs/security.md: script-src
+    // 'self' on the board origin). Missing dir just 404s at serve time.
+    const libsDir = join(
+      resolveRepoRoot(opts.webRootHint),
+      "server",
+      "origin-libs",
+    );
     originServer = Bun.serve({
       hostname: config.host,
       port: config.originPort,
-      fetch: (req) => handleBoardOriginRequest(req, config, securityHeaders),
+      fetch: (req) =>
+        handleBoardOriginRequest(req, config, db, libsDir, securityHeaders),
     });
   } catch (err) {
     hostServer.stop(true);
