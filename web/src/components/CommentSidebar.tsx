@@ -209,6 +209,14 @@ export function CommentSidebar(props: CommentSidebarProps) {
             onChange={(event) => {
               setBody(event.target.value);
             }}
+            onKeyDown={(event) => {
+              // Enter submits, Shift+Enter inserts a newline (GitHub-style
+              // convention); flipping to literal Shift+Enter-submits is one line
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submit();
+              }
+            }}
           />
           <div className="composer-actions">
             <button
