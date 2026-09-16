@@ -47,6 +47,25 @@ export const sessionsList: SessionInfo[] = [];
 export const revokeCalls: string[] = [];
 export const tokensList: TokenRow[] = [];
 
+// Restore-to-version (M7): restoreBoard records its call args (the route
+// contract is from_n + expected_version) and failures are flipped per test —
+// same mutable-holder pattern as uploadFailures. A recorded restore makes the
+// subsequent getBoard server-faithful: current_version advances and the
+// "restore of vN" pill exists (that refetch is what the SSE board.restored
+// event triggers). restoreAttempts records EVERY call — including ones the
+// failure switch rejects — so tests can count POSTs, not successes.
+export const restoredBoards: Array<{
+  boardId: string;
+  fromN: number;
+  expectedVersion: number;
+}> = [];
+export const restoreAttempts: Array<{
+  boardId: string;
+  fromN: number;
+  expectedVersion: number;
+}> = [];
+export const restoreFailures: { error: Error | null } = { error: null };
+
 const MD_BOARD: Board & {
   unresolved_comments: number;
   subscriber_count: number;
@@ -162,6 +181,18 @@ const VERSIONS: VersionMeta[] = [
   },
 ];
 
+// what a restore appends server-side (store.ts: label "restore of vN", actor
+// is the session's "human")
+const RESTORED_META: VersionMeta = {
+  board_id: "b1",
+  n: 3,
+  label: "restore of v1",
+  note: null,
+  anchors: [],
+  created_by: "human",
+  created_at: "2026-09-15T19:30:00.000Z",
+};
+
 const MD_VERSION: Version = {
   board_id: "b1",
   n: 2,
@@ -227,6 +258,9 @@ export function installApiMock(): void {
   sessionsList.length = 0;
   revokeCalls.length = 0;
   tokensList.length = 0;
+  restoredBoards.length = 0;
+  restoreAttempts.length = 0;
+  restoreFailures.error = null;
   mock.module("../api.ts", () => ({
     listBoards: async () => [MD_BOARD],
     getBoard: async (id: string) => {
@@ -241,6 +275,18 @@ export function installApiMock(): void {
           versions: VERSIONS,
         };
       }
+      if (id === "b-ended") {
+        return {
+          board: { ...MD_BOARD, status: "ended" as const },
+          versions: VERSIONS,
+        };
+      }
+      if (restoredBoards.some((call) => call.boardId === id)) {
+        return {
+          board: { ...MD_BOARD, current_version: 3 },
+          versions: [...VERSIONS, RESTORED_META],
+        };
+      }
       return { board: MD_BOARD, versions: VERSIONS };
     },
     getVersion: async (id: string, n: number) => {
@@ -248,7 +294,9 @@ export function installApiMock(): void {
       if (id === "b-html") {
         return { ...HTML_VERSION, n, content: n === 1 ? HTML_V1 : HTML_V2 };
       }
-      return MD_VERSION;
+      // faithful n — a restore lands the view on the new current version and
+      // this is what its fetch returns
+      return { ...MD_VERSION, n };
     },
     exchange: async (token: string) => {
       exchangeCalls.push(token);
@@ -294,6 +342,19 @@ export function installApiMock(): void {
         created_by: "human",
         created_at: "2026-09-15T20:00:00.000Z",
       };
+    },
+    restoreBoard: async (
+      boardId: string,
+      fromN: number,
+      expectedVersion: number,
+    ) => {
+      restoreAttempts.push({ boardId, fromN, expectedVersion });
+      if (restoreFailures.error !== null) {
+        throw restoreFailures.error;
+      }
+      restoredBoards.push({ boardId, fromN, expectedVersion });
+      // the 201 body IS the new current version (store.ts restoreVersion)
+      return { ...MD_VERSION, n: 3, label: `restore of v${fromN}` };
     },
     streamUrl: () => "/api/stream?token=stub",
     onUnauthorized: () => () => {},

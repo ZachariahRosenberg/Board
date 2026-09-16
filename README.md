@@ -39,6 +39,10 @@ Boards render markdown (mermaid + katex) and agent-authored HTML+CSS+JS (chart.j
 | [docs/research.md](docs/research.md) | Survey of similar tools and what we borrow from each |
 | [docs/decisions.md](docs/decisions.md) | Decision log (ADR-style) |
 | [docs/style-guide.md](docs/style-guide.md) | Code style and conventions |
+| [docs/api.md](docs/api.md) | The API inventory: REST routes, MCP tools, error codes |
+| [docs/anchors.md](docs/anchors.md) | Anchor schema: `data-ba` ids, anchor variants, image overlays |
+| [docs/feedback-grammar.md](docs/feedback-grammar.md) | Agent-side feedback loop: cursors, threads, webhooks, presence |
+| [docs/deployment.md](docs/deployment.md) | Install, run, systemd, data + backups, Docker (loopback rules) |
 
 Agent instructions: [AGENTS.md](AGENTS.md).
 
@@ -76,6 +80,8 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
 ```
 
 Agent wiring for opencode + claude code: `make install` (auto-mints per-agent tokens, writes the MCP config, installs the skill).
+
+Reference for agents and operators: [docs/api.md](docs/api.md) (every route, tool, error code), [docs/feedback-grammar.md](docs/feedback-grammar.md) (the consumption loop), [docs/anchors.md](docs/anchors.md), [docs/deployment.md](docs/deployment.md).
 
 ## Principles
 

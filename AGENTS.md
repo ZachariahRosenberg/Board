@@ -16,6 +16,8 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 4. [docs/style-guide.md](docs/style-guide.md) — code conventions
 5. [docs/decisions.md](docs/decisions.md) — why things are the way they are
 
+Below this required reading sit the reference docs — [docs/api.md](docs/api.md) (the API inventory), [docs/anchors.md](docs/anchors.md), [docs/feedback-grammar.md](docs/feedback-grammar.md), [docs/deployment.md](docs/deployment.md) — same binding rule: a change to the API surface, anchors, feedback loop, or deployment updates its doc in the same change.
+
 ## Commands
 
 All targets are live (`make list`/`export`/`import` arrived with M6):

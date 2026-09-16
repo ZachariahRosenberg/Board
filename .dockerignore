@@ -1,0 +1,24 @@
+# never bake credentials into an image (invariant 8)
+.board-token
+.env
+.env.*
+
+# git + repo housekeeping
+.git
+.gitignore
+CLAUDE.md
+AGENTS.md
+
+# dependencies (installed inside the image)
+node_modules
+**/node_modules
+
+# build artifacts (rebuilt in the web stage; never trusted from context)
+web/dist
+dist
+build
+
+# local dev data + logs
+.data
+*.log
+.DS_Store

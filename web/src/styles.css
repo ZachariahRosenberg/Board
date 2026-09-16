@@ -225,6 +225,12 @@ body {
   font-weight: 600;
 }
 
+/* restore-to-version affordance under the version switcher (BoardView) */
+.restore-bar {
+  margin: 0 0 16px;
+  font-size: 0.9em;
+}
+
 .board-content {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
@@ -841,7 +847,7 @@ body {
   border: 1px solid var(--warning);
 }
 
-.revoke-confirm {
+.confirm-inline {
   display: inline-flex;
   gap: 8px;
   align-items: center;

@@ -132,6 +132,23 @@ export function getVersion(id: string, n: number): Promise<Version> {
   return apiFetch<Version>(`/api/boards/${id}/versions/${n}`);
 }
 
+// Restore-to-version (M7, plan.md:85): republish version `fromN` as a new
+// current version — an append-only COPY, history is kept (store.ts
+// restoreVersion). Mirrors the route contract exactly: BOTH body fields are
+// required (routes/boards.ts asInt 400s on a missing one) — expected_version
+// is the caller's known current_version, and a stale one 409s
+// version_conflict with the server's current_version in the error body.
+export function restoreBoard(
+  boardId: string,
+  fromN: number,
+  expectedVersion: number,
+): Promise<Version> {
+  return apiFetch<Version>(`/api/boards/${boardId}/restore`, {
+    method: "POST",
+    body: JSON.stringify({ from_n: fromN, expected_version: expectedVersion }),
+  });
+}
+
 export interface CreateCommentInput {
   anchor: Comment["anchor"];
   body: string;

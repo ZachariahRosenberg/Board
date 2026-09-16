@@ -1,0 +1,137 @@
+# Deployment
+
+Installing, running, and supervising the daemon — on the host, under systemd, and in Docker. The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, [security.md](security.md)). Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
+
+## Install
+
+```
+make deps        # bun install (workspaces: server, cli, web)
+make web         # build the SPA the daemon serves from web/dist (repeat after UI changes)
+make install     # wire the board MCP server into local agents + mint their tokens
+```
+
+`make install` (→ `bun run cli/src/main.ts install`, flags via `make install FLAGS="--agents … --force"`):
+
+- Probes `GET /api/health` first (a down daemon is a warning, not a failure).
+- Mints one agent token per target agent, named `board-<agent>`. The plaintext is **printed once** — it is stored SHA-256 and cannot be shown again (invariant 7/8). Lost it? Re-mint.
+- Wires **opencode**: comment-preserving merge of an `mcp.board` entry (remote, `http://127.0.0.1:7800/mcp`, bearer header) into `~/.config/opencode/opencode.jsonc`, plus the skill copied to `~/.config/opencode/skills/board/`.
+- Wires **claude code**: `claude mcp add --transport http --scope user board http://127.0.0.1:7800/mcp --header "Authorization: Bearer …"` plus the skill at `~/.claude/skills/board/`.
+- **codex / pi**: prints a TOML snippet to paste (no automated wiring) and copies the skill to `~/.agents/skills/board/`.
+- `--force` re-mints a taken token name — names are permanent (D17): the old token is revoked and the fresh one lands under the first free suffix (`board-<agent>`, `board-<agent>-2`, …).
+
+Tokens by hand (any agent, or scripts): `make token add <name>` (`board token add <name> [--force]`), `board token list`, `board token revoke <name>`. Minting is **CLI-only by design** — no API route ever creates or echoes a token.
+
+## Run
+
+| Command | What it does |
+|---|---|
+| `make serve` | foreground daemon: `bun run server/src/main.ts` — listens on `127.0.0.1:7800` |
+| `make dev` | daemon (`bun --watch`) + vite dev server on `127.0.0.1:5173` (proxying `/api`, `/assets`, `/libs`); Ctrl-C takes both down |
+| `bun run server/src/main.ts` | the daemon directly — `make serve` is exactly this |
+
+- The daemon serves the **built** SPA from `web/dist`; without it, pages answer `404 web_not_built` (`make web`) while the API stays live. `make dev` bypasses the build with vite's dev server.
+- One process, one port: the SPA, `/api/*` REST, `/mcp` (Streamable HTTP), `/api/stream` (SSE), `/assets/<id>`, and `/libs/*` vendored libraries ([architecture.md](architecture.md)).
+
+### Environment
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BOARD_DATA_DIR` | `~/.board` | data directory (`~` expanded; relative paths resolve against cwd) |
+| `BOARD_PORT` | `7800` | listen port (0–65535) |
+| `BOARD_HOST` | `127.0.0.1` | **the** bind address. Loopback is invariant 1; changing it is the explicit, documented opt-out (see Docker below) |
+| `BOARD_BIND` | `127.0.0.1` | comma list of **additional Host-header names to accept** — it does NOT add bind addresses. Use it so clients whose `Host` header is not loopback (e.g. `host.docker.internal`) pass the DNS-rebinding allowlist |
+| `BOARD_SSE_HEARTBEAT_MS` | `25000` | SSE heartbeat interval (a test knob; leave alone in production) |
+
+## The data directory
+
+```
+~/.board/                     BOARD_DATA_DIR (overridable)
+  board.db                    SQLite (WAL): boards, versions, comments, events, tokens, subscribers, sessions
+  board.db-wal/-shm           WAL sidecar files (part of the db — back them up together)
+  events.jsonl                global append-only event log
+  boards/<id>/                self-contained board bundle
+    board.json                metadata snapshot
+    versions/NNN.html         immutable documents (+ NNN.md source for markdown input)
+    assets/<id>.<ext>         images
+    events.jsonl              per-board event channel
+```
+
+SQLite is the queryable source of truth; the bundle mirrors exist so a board is one portable, greppable unit. Agents never write here — **all writes flow through the daemon's API** (invariant 3); the CLI's token/session commands are the human's sanctioned local exception.
+
+**Backup story.** Two layers, use both:
+
+- **Per board (portable):** `make export ID=<id>` — a self-contained zip (manifest, version sources, comments, assets, the board's events as an audit snapshot). `make import FILE=<id>.zip` recreates it — under a **new board id**, through the import quarantine ([security.md](security.md)). Export/import is the save/load-old-boards story, and works on ended boards.
+- **Whole state (everything at once):** stop the daemon, copy the entire `BOARD_DATA_DIR` (db **with** its WAL sidecars, event logs, bundles), restart. A live copy of a WAL-mode SQLite file can be inconsistent — don't; a per-db `sqlite3 board.db ".backup '<dest>'"` is the in-place alternative for the db itself (bundles/logs still want the dir copy).
+
+## Supervised running (systemd, user unit)
+
+The daemon is an always-on user service. `~/.config/systemd/user/board.service`:
+
+```ini
+[Unit]
+Description=board daemon — loopback shared boards
+After=network.target
+
+[Service]
+WorkingDirectory=%h/geek/board
+ExecStart=%h/.bun/bin/bun %h/geek/board/server/src/main.ts
+Environment=BOARD_DATA_DIR=%h/.board
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+```
+systemctl --user daemon-reload
+systemctl --user enable --now board
+loginctl enable-linger $USER   # keep it running after logout (it is meant to be always-on)
+```
+
+No `BOARD_HOST` override — the default loopback bind is the invariant doing its work. A tmux `make serve` is the informal alternative; there is no auto-spawn magic (D10, D14: agents detect a down daemon via `board_status` and ask you to restart it — they never manage the lifecycle).
+
+## Docker
+
+The image builds the SPA, runs the daemon as non-root, and keeps all state in a volume. The Dockerfile is multi-stage (deps → web build → prod deps → runtime), bases on `oven/bun`, and bakes **no token** — credentials are minted inside the running container (below).
+
+```
+docker build -t board .
+```
+
+### The loopback tension — read before you run
+
+Invariant 1 binds `127.0.0.1` only. In a container, `127.0.0.1` is the **container's** loopback, so two supported run forms exist and nothing else:
+
+- **Published port** — `docker run -e BOARD_HOST=0.0.0.0 -p 127.0.0.1:7800:7800 board`. Inside the container the daemon binds all interfaces (`BOARD_HOST=0.0.0.0` — necessary, or the docker proxy cannot reach it), but the **publish form is what holds the security line**: `-p 127.0.0.1:7800:7800` maps host loopback to container loopback-facing port, so only the host's own users reach the daemon. The Host-header allowlist and every other hardening layer still apply to each request.
+- **`--network host`** — `docker run --network host board` (Linux). No network namespace: the container's `127.0.0.1` **is** the host's loopback, the default `BOARD_HOST=127.0.0.1` is correct as-is, and invariant 1 holds literally.
+
+**Never `-p 7800:7800`.** It publishes on every host interface and exposes the daemon to the network — the one misconfiguration this doc exists to prevent. The daemon is never to be exposed beyond the host; there is no remote mode (ngrok etc. are unshipped and would be re-examined before shipping, [security.md](security.md)).
+
+Agents in *other* containers reaching the daemon over the docker network pass through the Host-header allowlist only if you add their hostname: `-e BOARD_BIND=host.docker.internal` (plus `extra_hosts: ["host.docker.internal:host-gateway"]` on their side). Alternatively, volume-mount the data dir into the agent container and tail `boards/<id>/events.jsonl` — no network at all.
+
+### Data
+
+`ENV BOARD_DATA_DIR=/data` and `VOLUME /data` are baked in; keep state on a volume or bind mount:
+
+```
+docker run -e BOARD_HOST=0.0.0.0 -p 127.0.0.1:7800:7800 -v board-data:/data board
+```
+
+Backups are unchanged: `make export` per board (against the published port), or stop the container and copy the volume.
+
+### Tokens (minting inside the container)
+
+No credential is baked into the image. Mint inside the running container — the exec inherits `BOARD_DATA_DIR=/data` and the `bun` user's write access:
+
+```
+docker exec board bun cli/src/main.ts token add <name>          # print-once plaintext
+docker exec board bun cli/src/main.ts token list
+docker exec board bun cli/src/main.ts token revoke <name>
+```
+
+(the `make token add <name>`-equivalent; names are permanent — `--force` re-mints under a suffixed name, D17). Point host-side agent configs at the published port with the minted token — `make install` itself is a host-side flow (it writes per-agent configs under the *executing* user's home, so run it on the host, not via exec).
+
+### Health
+
+The image's `HEALTHCHECK` polls `GET /api/health` (the daemon's one unauthenticated route, `{ok: true}`) every 30 s via `bun -e`; `docker inspect` / `docker ps` report it. The same endpoint is what `make install` probes and what agents should treat as the daemon-liveness signal (D14).

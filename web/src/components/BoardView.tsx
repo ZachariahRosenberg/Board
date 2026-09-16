@@ -16,6 +16,7 @@ import {
   type BoardWithVersions,
   getBoard,
   getVersion,
+  restoreBoard,
   streamUrl,
 } from "../api.ts";
 import { mountBoardDocument } from "../board-mount.ts";
@@ -50,6 +51,13 @@ export function BoardView({ id }: { id: string }) {
   const [affordance, setAffordance] = useState<Affordance | null>(null);
   const [pendingAnchor, setPendingAnchor] = useState<Anchor | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Restore-to-version (M7, plan.md:85): two-click arm/confirm (SessionsPanel's
+  // revoke is the house pattern) — restoring is safe (append-only copy, history
+  // is kept) but surprising (the board jumps to a new version), so the confirm
+  // copy says what happens. `restoreArmed` holds the version n being confirmed.
+  const [restoreArmed, setRestoreArmed] = useState<number | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   // image annotation: the sidebar streams comments up; image-anchored threads
   // badge their board image and hover-preview the overlay on it, and the
   // lightbox (below) reviews any board image full size with its overlays
@@ -70,6 +78,9 @@ export function BoardView({ id }: { id: string }) {
   // without the pin, leaving the section toward the button unmounts it
   // before the click lands (the reported "icon disappears" bug).
   const pinnedRef = useRef(false);
+  // synchronous half of the restore double-post guard (see restore below) —
+  // state alone batches and lets a same-tick second click through
+  const restoreBusyRef = useRef(false);
   // While a selection affordance is up, hover affordances are suppressed —
   // the pointer crosses other sections on the way to the button and would
   // swap it out mid-flight (the reported "clicking does nothing" bug).
@@ -81,6 +92,8 @@ export function BoardView({ id }: { id: string }) {
     setSelected(null);
     setVersion(null);
     setError(null);
+    setRestoreArmed(null);
+    setRestoreError(null);
     getBoard(id)
       .then((loaded) => {
         if (!alive) {
@@ -413,6 +426,50 @@ export function BoardView({ id }: { id: string }) {
     return <div className="status">loading…</div>;
   }
   const board = data.board;
+  // Affordance gate: viewing a PAST version of an OPEN board only. The
+  // current version has nothing to restore (it IS current). Ended boards get
+  // no affordance at all — the sidebar's ended treatment (hide write
+  // affordances + a read-only notice) is the house pattern, the header badge
+  // already says why, and the server 409s board_ended regardless
+  // (store.ts requireOpenBoard).
+  const canRestore =
+    board.status === "open" &&
+    selected !== null &&
+    selected !== board.current_version;
+  const restore = async (): Promise<void> => {
+    // Ref guard, not just the busy state: React state updates batch, so two
+    // synchronous clicks share one closure whose restoreBusy is still false —
+    // the ref makes no-double-post airtight; the disabled button is the
+    // visible half of the same guard.
+    if (selected === null || restoreBusyRef.current) {
+      return;
+    }
+    restoreBusyRef.current = true;
+    setRestoreBusy(true);
+    try {
+      // The route requires BOTH fields: the version being restored + the
+      // current_version the client knows — a stale one 409s version_conflict
+      // and the SSE meta refresh resyncs the header.
+      const restored = await restoreBoard(id, selected, board.current_version);
+      // Post-restore viewed-version choice: the 201 body IS the new current
+      // version, so the view lands there immediately — deterministic, no SSE
+      // race. The stream's board.restored event deliberately only refreshes
+      // the meta (a REMOTE publish must not yank your viewed version), but
+      // this jump is the user's own explicit action; staring at v2 while the
+      // board sits at v3 would read as the restore doing nothing.
+      setSelected(restored.n);
+      setRestoreArmed(null);
+      setRestoreError(null);
+    } catch (err) {
+      setRestoreError(err instanceof Error ? err.message : "restore failed");
+      // failure disarms back to the arm button — a stuck confirm over a
+      // failed request invites blind re-clicks
+      setRestoreArmed(null);
+    } finally {
+      restoreBusyRef.current = false;
+      setRestoreBusy(false);
+    }
+  };
   // every image-anchored root comment's overlay for the lightboxed asset —
   // the review modal stacks them all (the board image shows one at a time on
   // hover; review shows the full picture)
@@ -448,12 +505,57 @@ export function BoardView({ id }: { id: string }) {
             className={`pill${meta.n === selected ? " active" : ""}`}
             onClick={() => {
               setSelected(meta.n);
+              // switching versions drops any armed confirm + stale error
+              setRestoreArmed(null);
+              setRestoreError(null);
             }}
           >
             {meta.label ?? `v${meta.n}`}
           </button>
         ))}
       </nav>
+      {canRestore && (
+        <div className="restore-bar">
+          {restoreArmed === selected ? (
+            <span className="confirm-inline">
+              Restore v{selected}? Publishes this version as a new version —
+              history is kept.
+              <button
+                type="button"
+                className="pill"
+                disabled={restoreBusy}
+                onClick={() => {
+                  void restore();
+                }}
+              >
+                confirm restore
+              </button>
+              <button
+                type="button"
+                className="linklike"
+                onClick={() => {
+                  setRestoreArmed(null);
+                }}
+              >
+                keep
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="linklike"
+              onClick={() => {
+                setRestoreArmed(selected);
+              }}
+            >
+              Restore this version
+            </button>
+          )}
+        </div>
+      )}
+      {/* outside the bar: a 409 (e.g. the board was ended mid-flight)
+            flips canRestore off — the error must survive the bar unmounting */}
+      {restoreError !== null && <div className="error">{restoreError}</div>}
       <div className="board-layout">
         <div className="board-main">
           {version === null ? (

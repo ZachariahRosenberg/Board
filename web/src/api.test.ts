@@ -14,6 +14,7 @@ import {
   onUnauthorized,
   replyComment,
   resolveComment,
+  restoreBoard,
   revokeSession,
   streamUrl,
 } from "./api.ts";
@@ -240,5 +241,44 @@ describe("api client", () => {
     expect(calls[5].input).toBe("/api/sessions/sess-9");
     expect(calls[5].init?.method).toBe("DELETE");
     clearSessionToken();
+  });
+
+  test("restoreBoard posts from_n + expected_version to /restore (route contract)", async () => {
+    setSessionToken("sess-token");
+    const calls = mockFetch(() =>
+      jsonResponse(201, { board_id: "b1", n: 3, label: "restore of v1" }),
+    );
+    const restored = await restoreBoard("b1", 1, 2);
+    expect(restored.n).toBe(3);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].input).toBe("/api/boards/b1/restore");
+    expect(calls[0].init?.method).toBe("POST");
+    // BOTH fields required by the route (asInt 400s on a missing one)
+    expect(calls[0].init?.body).toBe(
+      JSON.stringify({ from_n: 1, expected_version: 2 }),
+    );
+    // the JSON-label rule: every write carries content-type (415 guard)
+    expect(new Headers(calls[0].init?.headers).get("content-type")).toBe(
+      "application/json",
+    );
+    clearSessionToken();
+  });
+
+  test("restoreBoard surfaces the 409 envelope (version_conflict)", async () => {
+    mockFetch(() =>
+      jsonResponse(409, {
+        error: {
+          code: "version_conflict",
+          message: 'version conflict on board "b1": expected 2, current 5',
+          current_version: 5,
+        },
+      }),
+    );
+    const err = await restoreBoard("b1", 1, 2).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    const apiErr = err as ApiError;
+    expect(apiErr.status).toBe(409);
+    expect(apiErr.code).toBe("version_conflict");
+    expect(apiErr.message).toContain("current 5");
   });
 });

@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
-import { createComponentHarness, installDom } from "../test-dom.ts";
+import {
+  createComponentHarness,
+  installDom,
+  StubEventSource,
+} from "../test-dom.ts";
+import { clearSessionToken, setSessionToken } from "../token.ts";
 import { BoardView } from "./BoardView.tsx";
 import {
   createdComments,
   installApiMock,
+  restoreAttempts,
+  restoredBoards,
+  restoreFailures,
   uploadedAssets,
   versionCalls,
 } from "./test-api.ts";
@@ -694,5 +702,190 @@ describe("BoardView image annotation", () => {
       ".lightbox-stage img",
     ) as HTMLImageElement;
     expect(lightImg.getAttribute("src")).toBe("/assets/assetImg01");
+  });
+});
+
+describe("BoardView restore-to-version", () => {
+  // click the n-th version pill (0-based) — the switcher's only interactive
+  // children are the pills
+  const pill = (container: HTMLElement, n: number): HTMLElement => {
+    const el = container.querySelectorAll("nav.version-switcher button.pill")[
+      n
+    ];
+    if (!(el instanceof HTMLElement)) {
+      throw new Error("pill missing");
+    }
+    return el;
+  };
+  const barButton = (
+    container: HTMLElement,
+    label: string,
+  ): HTMLElement | null =>
+    ([...container.querySelectorAll(".restore-bar button")].find(
+      (button) => button.textContent === label,
+    ) as HTMLElement | undefined) ?? null;
+
+  test("a past version of an open board offers restore; the current version does not", async () => {
+    restoredBoards.length = 0;
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    // landed on current (v2) — nothing to restore
+    expect(container.querySelector(".restore-bar")).toBe(null);
+    await act(async () => {
+      pill(container, 0).click();
+    });
+    // viewing v1 of a board at v2 — the affordance is up
+    expect(container.querySelector(".restore-bar")?.textContent).toContain(
+      "Restore this version",
+    );
+  });
+
+  test("ended boards offer no restore affordance (the sidebar's read-only treatment)", async () => {
+    restoredBoards.length = 0;
+    const container = render(<BoardView id="b-ended" />);
+    await act(async () => {});
+    await act(async () => {
+      pill(container, 0).click();
+    });
+    expect(container.querySelector(".restore-bar")).toBe(null);
+  });
+
+  test("arm shows the what-happens copy; confirm posts from_n + expected_version and lands on the new current version", async () => {
+    restoredBoards.length = 0;
+    restoreFailures.error = null;
+    versionCalls.length = 0;
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    await act(async () => {
+      pill(container, 0).click();
+    });
+    await act(async () => {
+      (barButton(container, "Restore this version") as HTMLElement).click();
+    });
+    // the confirm copy says what happens (safe-but-surprising: append-only)
+    expect(container.querySelector(".confirm-inline")?.textContent).toContain(
+      "Publishes this version as a new version — history is kept",
+    );
+    await act(async () => {
+      (barButton(container, "confirm restore") as HTMLElement).click();
+    });
+    // body mirrors routes/boards.ts exactly: from_n + expected_version
+    expect(restoredBoards).toEqual([
+      { boardId: "b1", fromN: 1, expectedVersion: 2 },
+    ]);
+    // the 201 body is the new current version — the view lands there
+    expect(versionCalls.at(-1)).toEqual(["b1", 3]);
+    expect(container.querySelector(".confirm-inline")).toBe(null);
+  });
+
+  test("cancel disarms without posting", async () => {
+    restoredBoards.length = 0;
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    await act(async () => {
+      pill(container, 0).click();
+    });
+    await act(async () => {
+      (barButton(container, "Restore this version") as HTMLElement).click();
+    });
+    await act(async () => {
+      (barButton(container, "keep") as HTMLElement).click();
+    });
+    expect(restoredBoards).toEqual([]);
+    expect(container.querySelector(".confirm-inline")).toBe(null);
+    // still viewing the past version — the arm affordance is back
+    expect(container.querySelector(".restore-bar")?.textContent).toContain(
+      "Restore this version",
+    );
+  });
+
+  test("success: the SSE board.restored event refreshes meta and the new pill is active", async () => {
+    restoredBoards.length = 0;
+    restoreFailures.error = null;
+    setSessionToken("sess-ok");
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    await act(async () => {
+      pill(container, 0).click();
+    });
+    await act(async () => {
+      (barButton(container, "Restore this version") as HTMLElement).click();
+    });
+    await act(async () => {
+      (barButton(container, "confirm restore") as HTMLElement).click();
+    });
+    // the stream delivers board.restored (store.ts restoreVersion's event) —
+    // the meta refetch sees the new current version and its pill
+    const source = StubEventSource.instances.at(-1);
+    await act(async () => {
+      source?.emit("board", {
+        data: JSON.stringify({
+          seq: 30,
+          ts: "2026-09-15T19:30:00.000Z",
+          actor: "human",
+          type: "board.restored",
+          board_id: "b1",
+          payload: { from: 1, to: 3 },
+        }),
+      });
+    });
+    await act(async () => {});
+    const pills = [
+      ...container.querySelectorAll("nav.version-switcher button.pill"),
+    ];
+    expect(pills).toHaveLength(3);
+    expect(pills[2].textContent).toContain("restore of v1");
+    expect(pills[2].classList.contains("active")).toBe(true);
+    clearSessionToken();
+  });
+
+  test("409 surfaces the error, disarms, and a retry posts fresh (no double-post)", async () => {
+    restoredBoards.length = 0;
+    restoreAttempts.length = 0;
+    restoreFailures.error = new Error(
+      'version conflict on board "b1": expected 2, current 3',
+    );
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    await act(async () => {
+      pill(container, 0).click();
+    });
+    await act(async () => {
+      (barButton(container, "Restore this version") as HTMLElement).click();
+    });
+    await act(async () => {
+      const confirm = barButton(container, "confirm restore") as HTMLElement;
+      // same-tick double click — the ref guard must hold it to ONE post
+      confirm.click();
+      confirm.click();
+    });
+    expect(restoreAttempts).toHaveLength(1);
+    expect(restoreAttempts[0]).toEqual({
+      boardId: "b1",
+      fromN: 1,
+      expectedVersion: 2,
+    });
+    // the failure surfaced via the ApiError message pattern
+    expect(container.querySelector("div.error")?.textContent).toContain(
+      "version conflict",
+    );
+    // disarmed: the confirm collapsed back to the arm affordance
+    expect(container.querySelector(".confirm-inline")).toBe(null);
+    expect(container.querySelector(".restore-bar")?.textContent).toContain(
+      "Restore this version",
+    );
+    // the reset is clean: with the failure cleared, a fresh arm + confirm posts
+    restoreFailures.error = null;
+    await act(async () => {
+      (barButton(container, "Restore this version") as HTMLElement).click();
+    });
+    await act(async () => {
+      (barButton(container, "confirm restore") as HTMLElement).click();
+    });
+    expect(restoreAttempts).toHaveLength(2);
+    expect(restoredBoards).toEqual([
+      { boardId: "b1", fromN: 1, expectedVersion: 2 },
+    ]);
+    expect(container.querySelector("div.error")).toBe(null);
   });
 });

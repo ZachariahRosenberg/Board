@@ -83,7 +83,7 @@ export function SessionsPanel() {
                 </td>
                 <td>
                   {confirming === session.id ? (
-                    <span className="revoke-confirm">
+                    <span className="confirm-inline">
                       {/* Generic confirm for every row, deliberately: the SPA
                           holds only the bearer token, never its own session
                           row id (the server stores it hashed; the exchange
