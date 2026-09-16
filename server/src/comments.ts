@@ -34,6 +34,13 @@ export class CommentNotFound extends StoreError {
   }
 }
 
+export class CommentBodyRequired extends StoreError {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommentBodyRequired";
+  }
+}
+
 export interface CreateCommentInput {
   anchor: Anchor;
   body: string;
@@ -205,6 +212,20 @@ function validateOverlay(overlay: ImageOverlay): void {
 const INSERT_COMMENT =
   "INSERT INTO comments (id, board_id, version_n, anchor, body, author, in_reply_to, created_at, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+// The overlay IS the payload — a root comment anchored to an image with at
+// least one drawn arrow or box may have an empty/absent body (forcing text
+// produced "." posts in dogfood). Everything else still requires text:
+// replies, non-image anchors, and image anchors without overlay items.
+// Decision comment lives here (the validation site) rather than a new
+// decisions.md entry: this tightens an implementation detail, not the plan.
+function overlayCarriesPayload(anchor: Anchor): boolean {
+  return (
+    anchor.type === "image" &&
+    anchor.overlay !== undefined &&
+    anchor.overlay.arrows.length + anchor.overlay.boxes.length > 0
+  );
+}
+
 export function createComment(
   db: Database,
   dataDir: string,
@@ -224,6 +245,11 @@ export function createComment(
     throw new VersionNotFound(boardId, input.version_n);
   }
   validateAnchor(db, input.anchor, version);
+  if (input.body.trim().length === 0 && !overlayCarriesPayload(input.anchor)) {
+    throw new CommentBodyRequired(
+      "comment body must not be empty (only an image anchor with overlay items may post without text)",
+    );
+  }
   if (input.in_reply_to !== undefined) {
     const parent = getComment(db, input.in_reply_to);
     if (parent === null) {
@@ -303,6 +329,10 @@ export function replyComment(
   const parent = getComment(db, commentId);
   if (parent === null) {
     throw new CommentNotFound(commentId);
+  }
+  // replies always carry text — the overlay exemption is root-comments only
+  if (input.body.trim().length === 0) {
+    throw new CommentBodyRequired("reply body must not be empty");
   }
   const board = getBoard(db, parent.board_id);
   if (board === null) {

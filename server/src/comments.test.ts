@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ingestAsset } from "./assets.ts";
 import {
+  CommentBodyRequired,
   CommentNotFound,
   countUnresolvedRoots,
   createComment,
@@ -17,7 +18,7 @@ import {
   validateAnchor,
 } from "./comments.ts";
 import { openDb } from "./db.ts";
-import type { Version } from "./domain.ts";
+import type { Anchor, ImageOverlay, Version } from "./domain.ts";
 import { getEvents } from "./events.ts";
 import {
   BoardEnded,
@@ -428,6 +429,104 @@ describe("createComment", () => {
         actor: "human",
       }),
     ).toThrow(InvalidAnchor);
+  });
+});
+
+describe("comment body requirements (the overlay is the payload)", () => {
+  const EMPTY_OVERLAY = { arrows: [], boxes: [] };
+
+  function imageAnchorWith(
+    overlay?: ImageOverlay,
+  ): Extract<Anchor, { type: "image" }> {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    return overlay === undefined
+      ? { type: "image", asset_id: asset.id }
+      : { type: "image", asset_id: asset.id, overlay };
+  }
+
+  test("empty body + a root image anchor with overlay items posts", () => {
+    const comment = createComment(db, dataDir, boardId, {
+      anchor: imageAnchorWith({
+        arrows: [{ x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 }],
+        boxes: [],
+      }),
+      body: "",
+      version_n: 1,
+      actor: "human",
+    });
+    expect(getComment(db, comment.id)?.body).toBe("");
+  });
+
+  test("absent-equivalent whitespace body with an overlay also posts", () => {
+    const comment = createComment(db, dataDir, boardId, {
+      anchor: imageAnchorWith({
+        arrows: [],
+        boxes: [{ x: 0.5, y: 0.5, text: "look" }],
+      }),
+      body: "   ",
+      version_n: 1,
+      actor: "human",
+    });
+    expect(getComment(db, comment.id)?.body).toBe("   ");
+  });
+
+  test("empty body + a text anchor rejects", () => {
+    expect(() =>
+      createComment(db, dataDir, boardId, {
+        anchor: {
+          type: "text",
+          section_id: "b2",
+          originalText: "beta",
+          startOffset: 6,
+          endOffset: 10,
+        },
+        body: "",
+        version_n: 1,
+        actor: "human",
+      }),
+    ).toThrow(CommentBodyRequired);
+  });
+
+  test("empty body + an image anchor WITHOUT overlay items rejects", () => {
+    expect(() =>
+      createComment(db, dataDir, boardId, {
+        anchor: imageAnchorWith(EMPTY_OVERLAY),
+        body: "",
+        version_n: 1,
+        actor: "human",
+      }),
+    ).toThrow(CommentBodyRequired);
+  });
+
+  test("empty body + an overlay-less image anchor rejects too", () => {
+    expect(() =>
+      createComment(db, dataDir, boardId, {
+        anchor: imageAnchorWith(),
+        body: "",
+        version_n: 1,
+        actor: "human",
+      }),
+    ).toThrow(CommentBodyRequired);
+  });
+
+  test("a reply with an empty body rejects even on an image thread", () => {
+    const root = createComment(db, dataDir, boardId, {
+      anchor: imageAnchorWith({
+        arrows: [{ x1: 0, y1: 0, x2: 1, y2: 1 }],
+        boxes: [],
+      }),
+      body: "",
+      version_n: 1,
+      actor: "human",
+    });
+    expect(() =>
+      replyComment(db, dataDir, root.id, { body: "", actor: "agent-1" }),
+    ).toThrow(CommentBodyRequired);
   });
 });
 

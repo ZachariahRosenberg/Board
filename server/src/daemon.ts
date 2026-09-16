@@ -10,7 +10,11 @@ import {
 } from "./assets.ts";
 import { requireAuth } from "./auth.ts";
 import { ImportRejected } from "./bundle.ts";
-import { CommentNotFound, InvalidAnchor } from "./comments.ts";
+import {
+  CommentBodyRequired,
+  CommentNotFound,
+  InvalidAnchor,
+} from "./comments.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
 import { onEvent } from "./events.ts";
@@ -277,6 +281,11 @@ function errorResponse(
   }
   if (err instanceof CommentNotFound) {
     return jsonError(404, "comment_not_found", err.message, headers);
+  }
+  // reuses the existing invalid_request code — no new API error code (the
+  // message carries the specifics)
+  if (err instanceof CommentBodyRequired) {
+    return jsonError(400, "invalid_request", err.message, headers);
   }
   if (err instanceof InvalidAnchor) {
     return jsonError(400, "invalid_anchor", err.message, headers);

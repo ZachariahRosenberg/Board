@@ -29,7 +29,7 @@ All targets are live (`make list`/`export`/`import` arrived with M6):
 | Lint + format | `bunx biome check --write .` |
 | Run daemon | `make serve` |
 | Dev (hot reload) | `make dev` |
-| Mint agent token | `make token add <name>` |
+| Mint agent token | `make token add <name>` (`--force` via `make token add <name> FLAGS=--force` re-mints a taken name, D17) |
 | Build web app | `make web` |
 | Open UI | `make open [board id]` |
 

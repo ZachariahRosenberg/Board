@@ -124,6 +124,17 @@ const commentFixture: Comment[] = [
   IMAGE_COMMENT,
 ];
 
+// an overlay-only annotation arrives with an empty body (the overlay is the
+// payload) — the thread must read fine with the anchor affordance alone
+const EMPTY_BODY_COMMENTS: Comment[] = [
+  {
+    ...IMAGE_COMMENT,
+    id: "cm-img-empty",
+    seq: 14,
+    body: "",
+  },
+];
+
 const getCommentsCalls: string[] = [];
 const createdComments: Array<{ boardId: string; input: CreateCommentInput }> =
   [];
@@ -231,7 +242,12 @@ mock.module("../api.ts", () => ({
   },
   getComments: async (boardId: string) => {
     getCommentsCalls.push(boardId);
-    const comments = boardId === "b-html" ? HTML_COMMENTS : commentFixture;
+    const comments =
+      boardId === "b-html"
+        ? HTML_COMMENTS
+        : boardId === "b-empty"
+          ? EMPTY_BODY_COMMENTS
+          : commentFixture;
     return {
       comments,
       last_seq: comments.at(-1)?.seq ?? 0,
@@ -1071,6 +1087,143 @@ describe("CommentSidebar image upload", () => {
     expect(createdComments[0].input.body).toBe("look at the arrow");
   });
 
+  test("an overlay-only annotation posts with an empty body (the overlay is the payload)", async () => {
+    uploadedAssets.length = 0;
+    createdComments.length = 0;
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onOpenImage={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    await act(async () => {
+      (
+        container.querySelector("aside.comment-sidebar") as HTMLElement
+      ).dispatchEvent(dropEvent([pngFile]));
+    });
+    // draw one arrow, commit no text
+    const stage = container.querySelector(
+      ".overlay-editor-stage",
+    ) as HTMLElement;
+    stage.getBoundingClientRect = () =>
+      ({ left: 10, top: 20, width: 800, height: 400 }) as DOMRect;
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+    });
+    const canvas = container.querySelector(
+      ".overlay-editor-canvas",
+    ) as HTMLElement;
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("mousedown", {
+          bubbles: true,
+          clientX: 210,
+          clientY: 220,
+        }),
+      );
+    });
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("mousemove", {
+          bubbles: true,
+          clientX: 610,
+          clientY: 220,
+        }),
+      );
+    });
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("mouseup", {
+          bubbles: true,
+          clientX: 610,
+          clientY: 220,
+        }),
+      );
+    });
+    const done = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "done",
+    ) as HTMLElement;
+    await act(async () => {
+      done.click();
+    });
+    // empty body does NOT guard the composer anymore — the overlay enables it
+    const submit = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Comment",
+    ) as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    await act(async () => {
+      submit.click();
+    });
+    expect(createdComments).toHaveLength(1);
+    expect(createdComments[0].input.body).toBe("");
+    expect(createdComments[0].input.anchor).toEqual({
+      type: "image",
+      asset_id: "uploadedAsset",
+      overlay: {
+        arrows: [{ x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 }],
+        boxes: [],
+      },
+    });
+  });
+
+  test("editor done with an EMPTY overlay still requires body text", async () => {
+    uploadedAssets.length = 0;
+    createdComments.length = 0;
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onOpenImage={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    await act(async () => {
+      (
+        container.querySelector("aside.comment-sidebar") as HTMLElement
+      ).dispatchEvent(dropEvent([pngFile]));
+    });
+    const done = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "done",
+    ) as HTMLElement;
+    await act(async () => {
+      done.click();
+    });
+    const submit = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Comment",
+    ) as HTMLButtonElement;
+    // no overlay items + no text → still guarded, Enter included
+    expect(submit.disabled).toBe(true);
+    const textarea = container.querySelector("textarea") as HTMLElement;
+    await act(async () => {
+      textarea.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+    });
+    await act(async () => {});
+    expect(createdComments).toHaveLength(0);
+  });
+
   test("editor cancel discards — no composer, no comment", async () => {
     uploadedAssets.length = 0;
     createdComments.length = 0;
@@ -1252,6 +1405,32 @@ describe("CommentSidebar image upload", () => {
     // the annotate affordance stays next to the preview
     expect(composer?.innerHTML).toContain("annotate");
   });
+
+  test("an overlay-only thread (empty body) shows the anchor affordance alone", async () => {
+    const container = render(
+      <CommentSidebar
+        boardId="b-empty"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onOpenImage={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const thread = container.querySelector("div.thread") as HTMLElement;
+    expect(thread).not.toBe(null);
+    // the image affordances render — thumbnail + chip
+    expect(thread.querySelector("img.comment-image-thumb")).not.toBe(null);
+    expect(thread.querySelector("button.anchor-chip")).not.toBe(null);
+    // no empty body block
+    expect(thread.querySelector(".thread-body")).toBe(null);
+  });
 });
 
 describe("BoardView image annotation", () => {
@@ -1409,6 +1588,144 @@ describe("BoardView image annotation", () => {
     expect(
       container.querySelector(".overlay-editor-stage img")?.getAttribute("src"),
     ).toBe("/assets/assetImg01");
+  });
+
+  test("lightbox → annotate → editor captures drawn items in the posted anchor (regression)", async () => {
+    // owner report: a second annotation entered from the lightbox arrived
+    // with overlay {arrows:[], boxes:[]}. Drives the FULL path — lightbox
+    // annotate button → pendingAnchor → composer → editor → one arrow +
+    // one textbox → done → post with an EMPTY body (the overlay is the
+    // payload) — and asserts both items survive into the posted anchor.
+    uploadedAssets.length = 0;
+    createdComments.length = 0;
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    // 1. enter from the LIGHTBOX: click the board image → review modal
+    const img = container.querySelector(
+      ".image-anchor-wrap img",
+    ) as HTMLElement;
+    await act(async () => {
+      img.click();
+    });
+    expect(container.querySelector(".lightbox-backdrop")).not.toBe(null);
+    // 2. the lightbox annotate button stages the pending image anchor
+    const annotate = [
+      ...container.querySelectorAll(".lightbox-toolbar button"),
+    ].find((button) => button.textContent === "annotate") as HTMLElement;
+    await act(async () => {
+      annotate.click();
+    });
+    expect(container.querySelector(".lightbox-backdrop")).toBe(null);
+    expect(container.innerHTML).toContain("on image assetImg01");
+    // 3. the composer's annotate affordance opens the shared editor
+    const composerAnnotate = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "annotate",
+    ) as HTMLElement;
+    await act(async () => {
+      composerAnnotate.click();
+    });
+    const editor = container.querySelector(".overlay-editor");
+    expect(editor).not.toBe(null);
+    // 4. draw one arrow (press-drag-release) in the editor's canvas
+    const stage = container.querySelector(
+      ".overlay-editor-stage",
+    ) as HTMLElement;
+    stage.getBoundingClientRect = () =>
+      ({ left: 10, top: 20, width: 800, height: 400 }) as DOMRect;
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+    });
+    const canvas = container.querySelector(
+      ".overlay-editor-canvas",
+    ) as HTMLElement;
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("mousedown", {
+          bubbles: true,
+          clientX: 210,
+          clientY: 220,
+        }),
+      );
+    });
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("mousemove", {
+          bubbles: true,
+          clientX: 610,
+          clientY: 220,
+        }),
+      );
+    });
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("mouseup", {
+          bubbles: true,
+          clientX: 610,
+          clientY: 220,
+        }),
+      );
+    });
+    // 5. draw one textbox: place a label and commit its text with Enter
+    const textPill = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "text",
+    ) as HTMLElement;
+    await act(async () => {
+      textPill.click();
+    });
+    await act(async () => {
+      canvas.dispatchEvent(
+        new window.MouseEvent("click", {
+          bubbles: true,
+          clientX: 410,
+          clientY: 60,
+        }),
+      );
+    });
+    const input = container.querySelector(
+      ".overlay-editor-input",
+    ) as HTMLInputElement;
+    expect(input).not.toBe(null);
+    input.value = "hold this";
+    await act(async () => {
+      input.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    // 6. Done — the editor hands its overlay to the composer's anchor
+    const done = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "done",
+    ) as HTMLElement;
+    await act(async () => {
+      done.click();
+    });
+    expect(container.querySelector(".overlay-editor")).toBe(null);
+    // 7. post with an EMPTY body via Enter — the composer must submit
+    const submit = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Comment",
+    ) as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    const textarea = container.querySelector("textarea") as HTMLElement;
+    await act(async () => {
+      textarea.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+        }),
+      );
+    });
+    await act(async () => {});
+    // the posted anchor carries BOTH drawn items — no state reset, no
+    // overlay dropped between the editor's Done and the POST body
+    expect(createdComments).toHaveLength(1);
+    expect(createdComments[0].input.body).toBe("");
+    expect(createdComments[0].input.anchor).toEqual({
+      type: "image",
+      asset_id: "assetImg01",
+      overlay: {
+        arrows: [{ x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 }],
+        boxes: [{ x: 0.5, y: 0.1, text: "hold this" }],
+      },
+    });
   });
 
   test("Escape and a backdrop click close the lightbox; a click on the image box does not", async () => {

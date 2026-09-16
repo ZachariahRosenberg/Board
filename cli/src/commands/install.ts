@@ -18,8 +18,7 @@ import {
 import {
   type CreatedToken,
   createToken,
-  listTokens,
-  revokeToken,
+  reMintToken,
   TokenNameTaken,
 } from "../../../server/src/tokens.ts";
 import type { CommandIo } from "./token.ts";
@@ -356,15 +355,11 @@ function mintToken(
 ): CreatedToken | null {
   const name = `board-${agent}`;
   if (force) {
-    const existing = listTokens(db).find((t) => t.name === name);
-    if (existing !== undefined && existing.revoked_at === null) {
-      revokeToken(db, name);
+    const { previous, created } = reMintToken(db, { name });
+    if (previous !== null && previous.revoked_at === null) {
       io.stdout(`--force: revoked old token "${name}"`);
     }
-    // tokens.name is the PRIMARY KEY, so even a revoked token keeps its name;
-    // the fresh mint falls back to the first free suffix (board-<agent>-2 …)
-    // — the suffix is the visible trace of the re-mint (D17).
-    return firstFreeCreate(db, name);
+    return created;
   }
   try {
     return createToken(db, { name });
@@ -381,26 +376,6 @@ function mintToken(
     }
     throw err;
   }
-}
-
-function firstFreeCreate(db: Database, name: string): CreatedToken {
-  try {
-    return createToken(db, { name });
-  } catch (err) {
-    if (!(err instanceof TokenNameTaken)) {
-      throw err;
-    }
-  }
-  for (let n = 2; n < 100; n++) {
-    try {
-      return createToken(db, { name: `${name}-${n}` });
-    } catch (err) {
-      if (!(err instanceof TokenNameTaken)) {
-        throw err;
-      }
-    }
-  }
-  throw new Error(`no free token name under "${name}" (suffixes 2–99 taken)`);
 }
 
 export function runInstallCommand({

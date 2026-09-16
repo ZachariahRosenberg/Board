@@ -499,4 +499,66 @@ describe("image anchors over the comments API", () => {
       "invalid_request",
     );
   });
+
+  test("an overlay-only annotation posts with an absent or empty body (201)", async () => {
+    const board = await makeBoard("Overlay-only", agent.token, s.api);
+    const bytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    const upload = await fetch(`${s.hostUrl}/api/assets?board_id=${board}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        "content-type": "image/png",
+      },
+      body: bytes,
+    });
+    const asset = (await upload.json()) as { id: string };
+    const anchor = {
+      type: "image",
+      asset_id: asset.id,
+      overlay: {
+        arrows: [{ x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9 }],
+        boxes: [],
+      },
+    };
+    // body field absent entirely
+    const absent = await s.api.post(
+      `/api/boards/${board}/comments`,
+      { anchor, version_n: 1 },
+      { token: commenter.token },
+    );
+    expect(absent.status).toBe(201);
+    // empty string body
+    const empty = await s.api.post(
+      `/api/boards/${board}/comments`,
+      { anchor, body: "", version_n: 1 },
+      { token: commenter.token },
+    );
+    expect(empty.status).toBe(201);
+    expect((await json<CommentJson>(empty)).body).toBe("");
+  });
+
+  test("an empty body with a text anchor maps to 400 invalid_request", async () => {
+    const board = await makeBoard("Empty body text", agent.token, s.api);
+    const res = await s.api.post(
+      `/api/boards/${board}/comments`,
+      {
+        anchor: {
+          type: "text",
+          section_id: "b2",
+          originalText: "beta",
+          startOffset: 6,
+          endOffset: 10,
+        },
+        body: "",
+        version_n: 1,
+      },
+      { token: agent.token },
+    );
+    expect(res.status).toBe(400);
+    expect((await json<{ error: { code: string } }>(res)).error.code).toBe(
+      "invalid_request",
+    );
+  });
 });

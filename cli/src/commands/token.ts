@@ -3,6 +3,7 @@ import {
   type CreatedToken,
   createToken,
   listTokens,
+  reMintToken,
   revokeToken,
   TokenNameTaken,
 } from "../../../server/src/tokens.ts";
@@ -19,9 +20,29 @@ interface TokenCommandInput {
 }
 
 export const TOKEN_USAGE =
-  "usage: board token add <name> | board token list | board token revoke <name>";
+  "usage: board token add <name> [--force] | board token list | board token revoke <name>";
 
-function tokenAdd(db: Database, name: string, io: CommandIo): number {
+function tokenAdd(
+  db: Database,
+  name: string,
+  force: boolean,
+  io: CommandIo,
+): number {
+  if (force) {
+    // D17: names are permanent, so --force re-mints — revoke whatever row
+    // holds the name and mint fresh under the first free suffix, keeping
+    // the audit trail. Both facts print; the store-it-now line is the one
+    // sanctioned plaintext surface (invariant 8).
+    const { previous, created } = reMintToken(db, { name });
+    if (previous !== null) {
+      io.stdout(`revoked old token "${previous.name}"`);
+    }
+    io.stdout(
+      `token for "${created.name}" (store it now, it is not recoverable):`,
+    );
+    io.stdout(created.token);
+    return 0;
+  }
   let created: CreatedToken;
   try {
     created = createToken(db, { name });
@@ -29,6 +50,11 @@ function tokenAdd(db: Database, name: string, io: CommandIo): number {
     if (err instanceof TokenNameTaken) {
       // The message carries the agent name only; no token material exists in this branch (invariant 8).
       io.stderr(`board: ${err.message}`);
+      // actionable tail (dogfooded dead-end: the owner hit this and had no
+      // next step) — a taken name is permanent, so re-mint or rename
+      io.stderr(
+        "a taken name is permanent (D17); re-mint with --force or pick a new name",
+      );
       return 1;
     }
     throw err;
@@ -82,22 +108,28 @@ function tokenRevoke(db: Database, name: string, io: CommandIo): number {
 
 export function runTokenCommand({ db, argv, io }: TokenCommandInput): number {
   const [sub, ...rest] = argv;
-  const name = rest[0];
   switch (sub) {
-    case "add":
+    case "add": {
+      // simple argv scan (no arg-parsing dependency): flags and the name
+      // commute — `add --force cli` and `add cli --force` both parse
+      const name = rest.find((arg) => arg !== "--force");
+      const force = rest.includes("--force");
       if (name === undefined || name.length === 0) {
         io.stderr(TOKEN_USAGE);
         return 1;
       }
-      return tokenAdd(db, name, io);
+      return tokenAdd(db, name, force, io);
+    }
     case "list":
       return tokenList(db, io);
-    case "revoke":
-      if (name === undefined || name.length === 0) {
+    case "revoke": {
+      const revokeName = rest[0];
+      if (revokeName === undefined || revokeName.length === 0) {
         io.stderr(TOKEN_USAGE);
         return 1;
       }
-      return tokenRevoke(db, name, io);
+      return tokenRevoke(db, revokeName, io);
+    }
     default:
       io.stderr(TOKEN_USAGE);
       return 1;

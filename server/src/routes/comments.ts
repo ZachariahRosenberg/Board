@@ -50,7 +50,9 @@ function createCommentHandler(_req: Request, ctx: RequestContext): Response {
   const body = bodyFields(ctx);
   const comment = createComment(ctx.db, ctx.dataDir, boardId, {
     anchor: asAnchor(body.anchor, "anchor"),
-    body: asString(body.body, "body"),
+    // absent body reaches the store's emptiness rule, which allows an
+    // overlay-only image annotation (CommentBodyRequired maps to 400)
+    body: asOptionalString(body.body, "body") ?? "",
     version_n: asInt(body.version_n, "version_n"),
     in_reply_to: asOptionalString(body.in_reply_to, "in_reply_to"),
     actor: actorName(ctx),

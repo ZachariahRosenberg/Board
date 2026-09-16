@@ -124,6 +124,59 @@ export function revokeToken(db: Database, name: string): TokenInfo | null {
   return { ...toInfo(row), revoked_at: revokedAt };
 }
 
+export interface ReMintResult {
+  // the row that held the name before the re-mint, in its pre-call state
+  // (null when the name was free — the caller decides what that's worth)
+  previous: TokenInfo | null;
+  created: CreatedToken;
+}
+
+// tokens.name is the PRIMARY KEY and a revoked row keeps its name forever
+// (D17) — a --force re-mint revokes whatever row holds the requested name
+// (whatever state: an already-revoked row revokes idempotently) and mints a
+// fresh token under the first free suffix (`name`, `name-2`, …), keeping the
+// row's audit trail. The old plaintext is unrecoverable (stored hashed,
+// invariant 8) — that is WHY re-minting, not re-showing, is the only option.
+export function reMintToken(
+  db: Database,
+  opts: { name: string; scopes?: string[] },
+): ReMintResult {
+  const row = db
+    .prepare("SELECT * FROM tokens WHERE name = ?")
+    .get(opts.name) as TokenRow | null;
+  const previous = row === null ? null : toInfo(row);
+  if (previous !== null) {
+    revokeToken(db, opts.name);
+  }
+  return { previous, created: firstFreeCreate(db, opts.name, opts.scopes) };
+}
+
+// D17's install precedent: the exact name first, then suffixes 2–99 — the
+// suffix is the visible trace of the re-mint in `token list`.
+function firstFreeCreate(
+  db: Database,
+  name: string,
+  scopes?: string[],
+): CreatedToken {
+  try {
+    return createToken(db, { name, scopes });
+  } catch (err) {
+    if (!(err instanceof TokenNameTaken)) {
+      throw err;
+    }
+  }
+  for (let n = 2; n < 100; n++) {
+    try {
+      return createToken(db, { name: `${name}-${n}`, scopes });
+    } catch (err) {
+      if (!(err instanceof TokenNameTaken)) {
+        throw err;
+      }
+    }
+  }
+  throw new Error(`no free token name under "${name}" (suffixes 2–99 taken)`);
+}
+
 export function listTokens(db: Database): TokenInfo[] {
   const rows = db
     .prepare("SELECT * FROM tokens ORDER BY name")

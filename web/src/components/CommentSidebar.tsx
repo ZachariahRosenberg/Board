@@ -106,13 +106,29 @@ export function CommentSidebar(props: CommentSidebarProps) {
     setBodyEmpty(true);
   };
 
+  // the composer's image anchor when a root comment is being written —
+  // extracted so the annotate button's closure keeps the narrowed type
+  const pendingImage =
+    composer !== null &&
+    composer.replyTo === null &&
+    composer.anchor.type === "image"
+      ? composer.anchor
+      : null;
+  // the overlay IS the payload (dogfooded: forcing a body produced "." posts)
+  // — a pending image anchor with at least one drawn item may post with an
+  // empty body; everything else (replies included) still requires text
+  const overlayReady =
+    pendingImage !== null &&
+    pendingImage.overlay !== undefined &&
+    pendingImage.overlay.arrows.length + pendingImage.overlay.boxes.length > 0;
+
   const submit = async (): Promise<void> => {
     const text = (bodyRef.current?.value ?? "").trim();
     if (
       composer === null ||
-      text.length === 0 ||
       busy ||
-      props.versionN === null
+      props.versionN === null ||
+      (text.length === 0 && !overlayReady)
     ) {
       return;
     }
@@ -217,14 +233,6 @@ export function CommentSidebar(props: CommentSidebarProps) {
           comment.in_reply_to !== null && rootOf(comment)?.id === root.id,
       )
       .sort((a, b) => a.seq - b.seq);
-  // the composer's image anchor when a root comment is being written —
-  // extracted so the annotate button's closure keeps the narrowed type
-  const pendingImage =
-    composer !== null &&
-    composer.replyTo === null &&
-    composer.anchor.type === "image"
-      ? composer.anchor
-      : null;
 
   return (
     <aside
@@ -369,7 +377,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
           <div className="composer-actions">
             <button
               type="button"
-              disabled={busy || bodyEmpty}
+              disabled={busy || (bodyEmpty && !overlayReady)}
               onClick={() => {
                 void submit();
               }}
@@ -493,7 +501,11 @@ function ThreadView(props: ThreadViewProps) {
       >
         {anchorDescriptor(root.anchor)}
       </button>
-      <div className="thread-body">{root.body}</div>
+      {/* an overlay-only annotation (empty body, item 1) shows the anchor
+          affordance alone — no empty body block */}
+      {root.body.trim().length > 0 && (
+        <div className="thread-body">{root.body}</div>
+      )}
       <div className="thread-meta">
         <span
           className={`author-badge${root.author === "human" ? " human" : ""}`}

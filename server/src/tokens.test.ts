@@ -8,6 +8,7 @@ import { openDb } from "./db.ts";
 import {
   createToken,
   listTokens,
+  reMintToken,
   revokeToken,
   TokenError,
   TokenNameTaken,
@@ -162,6 +163,56 @@ describe("revokeToken", () => {
   test("returns null for an unknown name", () => {
     const db = freshDb();
     expect(revokeToken(db, "nobody")).toBeNull();
+    db.close();
+  });
+});
+
+describe("reMintToken (D17 --force re-mint)", () => {
+  test("revokes the active row and mints fresh under the first free suffix", () => {
+    const db = freshDb();
+    const first = createToken(db, { name: "cli" });
+    const { previous, created } = reMintToken(db, { name: "cli" });
+    // both facts for the caller: what was revoked, what was minted
+    expect(previous?.name).toBe("cli");
+    expect(previous?.revoked_at).toBeNull();
+    expect(created.name).toBe("cli-2");
+    // the old credential dies immediately; the new one verifies
+    expect(verifyToken(db, first.token)).toBeNull();
+    expect(verifyToken(db, created.token)?.name).toBe("cli-2");
+    // the audit trail keeps both rows — names are permanent (D17)
+    const names = listTokens(db).map((info) => info.name);
+    expect(names).toEqual(["cli", "cli-2"]);
+    db.close();
+  });
+
+  test("a free name mints under the exact name with no revocation", () => {
+    const db = freshDb();
+    const { previous, created } = reMintToken(db, { name: "cli" });
+    expect(previous).toBeNull();
+    expect(created.name).toBe("cli");
+    expect(verifyToken(db, created.token)?.name).toBe("cli");
+    db.close();
+  });
+
+  test("an already-revoked row still re-mints suffixed (revoke is idempotent)", () => {
+    const db = freshDb();
+    const first = createToken(db, { name: "cli" });
+    revokeToken(db, "cli");
+    const { previous, created } = reMintToken(db, { name: "cli" });
+    expect(previous?.name).toBe("cli");
+    expect(previous?.revoked_at).not.toBeNull();
+    expect(created.name).toBe("cli-2");
+    expect(verifyToken(db, first.token)).toBeNull();
+    expect(verifyToken(db, created.token)?.name).toBe("cli-2");
+    db.close();
+  });
+
+  test("suffix walking skips taken names (cli, cli-2 → cli-3)", () => {
+    const db = freshDb();
+    createToken(db, { name: "cli" });
+    createToken(db, { name: "cli-2" });
+    const { created } = reMintToken(db, { name: "cli" });
+    expect(created.name).toBe("cli-3");
     db.close();
   });
 });

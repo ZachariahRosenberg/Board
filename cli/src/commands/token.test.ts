@@ -81,7 +81,60 @@ describe("board token add", () => {
     const code = runTokenCommand({ db, argv: ["add", "alice"], io: second.io });
     expect(code).toBe(1);
     expect(second.err.join("\n")).toContain("alice");
+    expect(second.err.join("\n")).toContain(
+      "a taken name is permanent (D17); re-mint with --force or pick a new name",
+    );
     expect(findToken(second.out)).toBeUndefined();
+    db.close();
+  });
+
+  test("--force on a taken name revokes it and mints under a suffixed name", () => {
+    const db = freshDb();
+    const first = capture();
+    expect(runTokenCommand({ db, argv: ["add", "cli"], io: first.io })).toBe(0);
+    const oldToken = findToken(first.out) ?? "";
+    const second = capture();
+    const code = runTokenCommand({
+      db,
+      argv: ["add", "cli", "--force"],
+      io: second.io,
+    });
+    expect(code).toBe(0);
+    expect(second.err).toEqual([]);
+    const text = second.out.join("\n");
+    // both facts print: what was revoked, what was minted
+    expect(text).toContain('revoked old token "cli"');
+    expect(text).toContain('token for "cli-2"');
+    expect(text).toContain("not recoverable");
+    // the new plaintext is present exactly once; the old one verifies no more
+    const newToken = findToken(second.out);
+    expect(newToken).toBeDefined();
+    expect(newToken).not.toBe(oldToken);
+    expect(text.split(newToken ?? "")).toHaveLength(2);
+    expect(verifyToken(db, oldToken)).toBeNull();
+    expect(verifyToken(db, newToken ?? "")?.name).toBe("cli-2");
+    // the audit trail keeps both rows (D17)
+    const names = (
+      db.prepare("SELECT name FROM tokens ORDER BY name").all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name);
+    expect(names).toEqual(["cli", "cli-2"]);
+    db.close();
+  });
+
+  test("--force on a free name mints under the exact name", () => {
+    const db = freshDb();
+    const cap = capture();
+    const code = runTokenCommand({
+      db,
+      argv: ["add", "--force", "fresh"],
+      io: cap.io,
+    });
+    expect(code).toBe(0);
+    expect(cap.out.join("\n")).not.toContain("revoked");
+    expect(cap.out.join("\n")).toContain('token for "fresh"');
+    expect(verifyToken(db, findToken(cap.out) ?? "")?.name).toBe("fresh");
     db.close();
   });
 
