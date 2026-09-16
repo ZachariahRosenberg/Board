@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 `board` is a local-first shared board system: an always-on Bun daemon hosts rich boards (markdown + interactive HTML) that agents publish via MCP/REST, a human annotates with anchored comments in a web UI, and everyone consumes via an append-only event log.
 
-**Current status: M5-lite + M4 complete and owner-accepted (D18: full host-render)** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 10 tools, stateless Streamable HTTP), every board — markdown and agent HTML — renders in the host chrome with full anchoring (text selection, sections, rows; html boards get auto-injected `data-ba` at publish, scripts run per D18), humans comment with threads + resolve + live SSE, agents consume feedback via the comments cursor (D15). `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M5 webhooks, M6 assets/import/export (import must revisit D18's foreign-content caveat), M7 audit view + hardening. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
+**Current status: M5 + M6 complete (M1–M6 all shipped), M7 remaining** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 13 tools, stateless Streamable HTTP), every board — markdown and agent HTML — renders in the host chrome with full anchoring (text selection, sections, rows, images; html boards get auto-injected `data-ba` at publish, scripts run per D18), humans comment with threads + resolve + live SSE (image comments carry arrow/box overlays), agents consume feedback via the comments cursor (D15) or HMAC-signed webhooks; assets ingest through verification (magic bytes + mime allowlist + caps, SVG sanitized) and boards round-trip through export/import with the D18 quarantine re-examination. `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M7 audit view + restore UI + hardening + final smoke. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
 
 ## Read order
 
@@ -18,7 +18,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 ## Commands
 
-`make list`/`export`/`import` arrive with later milestones; `make deps` and `make install` are live:
+All targets are live (`make list`/`export`/`import` arrived with M6):
 
 | Task | Command |
 |---|---|

@@ -111,6 +111,7 @@ export interface Comment {
 
 export type EventType =
   | "board.created"
+  | "board.imported"
   | "board.published"
   | "board.ended"
   | "board.restored"

@@ -1,7 +1,14 @@
 import type { Database } from "bun:sqlite";
 import type { Document, Element } from "happy-dom";
 import { Window } from "happy-dom";
-import type { Actor, Anchor, Comment, Version } from "./domain.ts";
+import { getAsset } from "./assets.ts";
+import type {
+  Actor,
+  Anchor,
+  Comment,
+  ImageOverlay,
+  Version,
+} from "./domain.ts";
 import { appendEventDb, mirrorEventFiles } from "./events.ts";
 import { shortId } from "./ids.ts";
 import {
@@ -82,12 +89,17 @@ function findDataBa(doc: Document, id: string): Element | null {
 
 // Offsets are informational; the quoted originalText is the re-anchor truth
 // (plannotator's block+offset+quote model, docs/plan.md "Data model").
-export function validateAnchor(anchor: Anchor, version: Version): void {
+export function validateAnchor(
+  db: Database,
+  anchor: Anchor,
+  version: Version,
+): void {
   if (anchor.type === "board") {
     return;
   }
   if (anchor.type === "image") {
-    throw new InvalidAnchor("image anchors land with M6");
+    validateImageAnchor(db, anchor, version);
+    return;
   }
   const doc = new window.DOMParser().parseFromString(
     version.content,
@@ -122,6 +134,74 @@ export function validateAnchor(anchor: Anchor, version: Version): void {
   }
 }
 
+// Overlay caps on untrusted input: the overlay renders as SVG for every
+// viewer of the board, so item counts and label length are bounded — 50 items
+// and a 200-char label (a positioned label is terse; there is no precedent
+// body cap in this codebase to mirror). Labels over the cap reject.
+const MAX_OVERLAY_ITEMS = 50;
+const MAX_OVERLAY_TEXT_LENGTH = 200;
+
+// Image anchors reference an asset, not a data-ba id — so unlike section/row/
+// text anchors they validate against the assets table: the asset must exist
+// and belong to the anchor's own board (cross-board asset refs are the image
+// analogue of the cross-board parent check).
+function validateImageAnchor(
+  db: Database,
+  anchor: Extract<Anchor, { type: "image" }>,
+  version: Version,
+): void {
+  const overlay = anchor.overlay;
+  if (overlay !== undefined) {
+    validateOverlay(overlay);
+  }
+  const asset = getAsset(db, anchor.asset_id);
+  if (asset === null) {
+    throw new InvalidAnchor(`asset "${anchor.asset_id}" not found`);
+  }
+  if (asset.board_id !== version.board_id) {
+    throw new InvalidAnchor(
+      `asset "${anchor.asset_id}" belongs to a different board`,
+    );
+  }
+}
+
+function inUnitRange(value: number): boolean {
+  return value >= 0 && value <= 1;
+}
+
+function validateOverlay(overlay: ImageOverlay): void {
+  if (overlay.arrows.length > MAX_OVERLAY_ITEMS) {
+    throw new InvalidAnchor(
+      `overlay has ${overlay.arrows.length} arrows, exceeding the ${MAX_OVERLAY_ITEMS} item cap`,
+    );
+  }
+  for (const arrow of overlay.arrows) {
+    if (
+      !inUnitRange(arrow.x1) ||
+      !inUnitRange(arrow.y1) ||
+      !inUnitRange(arrow.x2) ||
+      !inUnitRange(arrow.y2)
+    ) {
+      throw new InvalidAnchor("overlay arrow coordinates must be in [0, 1]");
+    }
+  }
+  if (overlay.boxes.length > MAX_OVERLAY_ITEMS) {
+    throw new InvalidAnchor(
+      `overlay has ${overlay.boxes.length} boxes, exceeding the ${MAX_OVERLAY_ITEMS} item cap`,
+    );
+  }
+  for (const box of overlay.boxes) {
+    if (!inUnitRange(box.x) || !inUnitRange(box.y)) {
+      throw new InvalidAnchor("overlay box coordinates must be in [0, 1]");
+    }
+    if (box.text.length > MAX_OVERLAY_TEXT_LENGTH) {
+      throw new InvalidAnchor(
+        `overlay box text is ${box.text.length} chars, exceeding the ${MAX_OVERLAY_TEXT_LENGTH} char cap`,
+      );
+    }
+  }
+}
+
 const INSERT_COMMENT =
   "INSERT INTO comments (id, board_id, version_n, anchor, body, author, in_reply_to, created_at, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -143,7 +223,7 @@ export function createComment(
   if (version === null) {
     throw new VersionNotFound(boardId, input.version_n);
   }
-  validateAnchor(input.anchor, version);
+  validateAnchor(db, input.anchor, version);
   if (input.in_reply_to !== undefined) {
     const parent = getComment(db, input.in_reply_to);
     if (parent === null) {

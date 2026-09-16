@@ -194,6 +194,57 @@ interface IngestAssetInput {
   actor: string;
 }
 
+export interface VerifiedAsset {
+  mime: string;
+  bytes: Uint8Array;
+}
+
+// The ingest pipeline's verification core (mime allowlist → magic bytes /
+// svg parse-and-sanitize), shared by ingestAsset and bundle import — import
+// must re-run THIS function, never a forked copy of the checks, or the
+// quarantine re-examination (docs/security.md "Import quarantine") drifts
+// from what ingest actually enforces. Size caps stay with the callers
+// (ingestAsset / the import validator) so each names its own context.
+// Throws AssetTypeNotAllowed / AssetNotAnImage on rejection.
+export function verifyAssetBytes(
+  bytes: Uint8Array,
+  declaredMime: string,
+): VerifiedAsset {
+  // content-type parameters (charset etc.) never participate in the check
+  const mime = declaredMime.split(";")[0].trim().toLowerCase();
+  if (!ASSET_MIME_ALLOWLIST.has(mime)) {
+    throw new AssetTypeNotAllowed(`"${mime}" is not on the image allowlist`);
+  }
+
+  const sniffed = sniffImageMime(bytes);
+  if (mime === "image/svg+xml") {
+    // real image bytes posing as svg are a lie about the type, not an svg
+    if (sniffed !== null) {
+      throw new AssetNotAnImage(
+        `declared ${mime} but the bytes match ${sniffed} magic`,
+      );
+    }
+    // SVG's verification is parse-and-sanitize: the sanitized bytes — never
+    // the original — are what gets stored (docs/security.md "Assets")
+    const sanitized = sanitizeSvgDocument(new TextDecoder().decode(bytes));
+    if (sanitized === null) {
+      throw new AssetNotAnImage("no svg document survived sanitization");
+    }
+    return { mime, bytes: new TextEncoder().encode(sanitized) };
+  }
+  if (sniffed === null) {
+    throw new AssetNotAnImage(
+      "magic bytes do not match any allowlisted image type",
+    );
+  }
+  if (sniffed !== mime) {
+    throw new AssetNotAnImage(
+      `declared ${mime} but the bytes match ${sniffed} magic`,
+    );
+  }
+  return { mime: sniffed, bytes };
+}
+
 export function ingestAsset(
   db: Database,
   dataDir: string,
@@ -204,46 +255,9 @@ export function ingestAsset(
   if (input.bytes.byteLength > MAX_ASSET_BYTES) {
     throw new AssetTooLarge(input.bytes.byteLength);
   }
-  // content-type parameters (charset etc.) never participate in the check
-  const mime = input.mime.split(";")[0].trim().toLowerCase();
-  if (!ASSET_MIME_ALLOWLIST.has(mime)) {
-    throw new AssetTypeNotAllowed(`"${mime}" is not on the image allowlist`);
-  }
-
-  let storedMime: string;
-  let storedBytes: Uint8Array;
-  const sniffed = sniffImageMime(input.bytes);
-  if (mime === "image/svg+xml") {
-    // real image bytes posing as svg are a lie about the type, not an svg
-    if (sniffed !== null) {
-      throw new AssetNotAnImage(
-        `declared ${mime} but the bytes match ${sniffed} magic`,
-      );
-    }
-    // SVG's verification is parse-and-sanitize: the sanitized bytes — never
-    // the original — are what gets stored (docs/security.md "Assets")
-    const sanitized = sanitizeSvgDocument(
-      new TextDecoder().decode(input.bytes),
-    );
-    if (sanitized === null) {
-      throw new AssetNotAnImage("no svg document survived sanitization");
-    }
-    storedMime = mime;
-    storedBytes = new TextEncoder().encode(sanitized);
-  } else {
-    if (sniffed === null) {
-      throw new AssetNotAnImage(
-        "magic bytes do not match any allowlisted image type",
-      );
-    }
-    if (sniffed !== mime) {
-      throw new AssetNotAnImage(
-        `declared ${mime} but the bytes match ${sniffed} magic`,
-      );
-    }
-    storedMime = sniffed;
-    storedBytes = input.bytes;
-  }
+  const verified = verifyAssetBytes(input.bytes, input.mime);
+  const storedMime = verified.mime;
+  const storedBytes = verified.bytes;
 
   const total = boardAssetBytes(db, boardId);
   if (total + storedBytes.byteLength > MAX_BOARD_ASSET_BYTES) {
@@ -366,6 +380,15 @@ export function getAsset(db: Database, id: string): Asset | null {
     .prepare("SELECT * FROM assets WHERE id = ?")
     .get(id) as AssetRow | null;
   return row === null ? null : mapAssetRow(row);
+}
+
+// Export (bundle.ts) reads every asset of a board — index order is the
+// bundle's asset order, so keep it stable.
+export function listAssets(db: Database, boardId: string): Asset[] {
+  const rows = db
+    .prepare("SELECT * FROM assets WHERE board_id = ? ORDER BY created_at, id")
+    .all(boardId) as AssetRow[];
+  return rows.map(mapAssetRow);
 }
 
 // Binary uploads (img-style) arrive as the raw request body — raw bytes cannot

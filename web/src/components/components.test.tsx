@@ -37,6 +37,8 @@ mock.module("mermaid", () => ({
 
 const versionCalls: Array<[string, number]> = [];
 const exchangeCalls: string[] = [];
+const uploadedAssets: Array<{ boardId: string; file: File }> = [];
+let uploadAssetError: Error | null = null;
 
 const MD_BOARD: Board & { unresolved_comments: number } = {
   id: "b1",
@@ -93,11 +95,30 @@ const COMMENT_RESOLVED: Comment = {
   resolved_by: "human",
 };
 
+const IMAGE_ANCHOR: Anchor = {
+  type: "image",
+  asset_id: "assetImg01",
+  overlay: {
+    arrows: [{ x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 }],
+    boxes: [{ x: 0.5, y: 0.1, text: "watch this" }],
+  },
+};
+
+const IMAGE_COMMENT: Comment = {
+  ...COMMENT_ROOT,
+  id: "cm-img",
+  seq: 13,
+  anchor: IMAGE_ANCHOR,
+  body: "The arrow points at the regression.",
+};
+
 const commentFixture: Comment[] = [
   COMMENT_ROOT,
   COMMENT_REPLY,
   COMMENT_RESOLVED,
+  IMAGE_COMMENT,
 ];
+
 const getCommentsCalls: string[] = [];
 const createdComments: Array<{ boardId: string; input: CreateCommentInput }> =
   [];
@@ -131,7 +152,7 @@ const MD_VERSION: Version = {
   label: "after review",
   note: null,
   content:
-    '<!doctype html><html><body><h1 data-ba="b1">Plan</h1><p data-ba="b2">alpha beta gamma</p><pre class="mermaid">graph TD</pre><table data-ba="b3"><tbody><tr data-ba="b3r1"><td>one</td></tr></tbody></table></body></html>',
+    '<!doctype html><html><body><h1 data-ba="b1">Plan</h1><p data-ba="b2">alpha beta gamma</p><pre class="mermaid">graph TD</pre><table data-ba="b3"><tbody><tr data-ba="b3r1"><td>one</td></tr></tbody></table><p data-ba="b4"><img src="/assets/assetImg01" alt="shot"></p></body></html>',
   source_md: "# Plan",
   anchors: [],
   created_by: "agent-1",
@@ -222,6 +243,22 @@ mock.module("../api.ts", () => ({
   resolveComment: async (commentId: string) => {
     resolvedIds.push(commentId);
     return { ...COMMENT_RESOLVED, id: commentId };
+  },
+  uploadAsset: async (boardId: string, file: File) => {
+    if (uploadAssetError !== null) {
+      throw uploadAssetError;
+    }
+    uploadedAssets.push({ boardId, file });
+    return {
+      id: "uploadedAsset",
+      board_id: boardId,
+      file: "uploadedAsset.png",
+      mime: file.type,
+      size: 64,
+      source: "binary" as const,
+      created_by: "human",
+      created_at: "2026-09-15T20:00:00.000Z",
+    };
   },
   streamUrl: () => "/api/stream?token=stub",
   onUnauthorized: () => () => {},
@@ -610,6 +647,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={(anchor) => {
           highlightCalls.push(anchor);
         }}
@@ -627,7 +666,7 @@ describe("CommentSidebar", () => {
     expect(container.innerHTML).toContain("agent-1");
     expect(container.innerHTML).toContain("Fixed in v2.");
     expect(container.innerHTML).toContain("✓ resolved");
-    expect(container.innerHTML).toContain("1 unresolved / 2 threads");
+    expect(container.innerHTML).toContain("2 unresolved / 3 threads");
     const chip = container.querySelector(
       "button.anchor-chip.clickable",
     ) as HTMLElement;
@@ -648,6 +687,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -672,6 +713,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -686,7 +729,7 @@ describe("CommentSidebar", () => {
     });
     expect(container.innerHTML).not.toContain("✓ resolved");
     // the header counts stay honest while folded
-    expect(container.innerHTML).toContain("1 unresolved / 2 threads");
+    expect(container.innerHTML).toContain("2 unresolved / 3 threads");
     const show = [...container.querySelectorAll("button.pill")].find(
       (button) => button.textContent === "show resolved",
     ) as HTMLElement;
@@ -705,6 +748,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -724,6 +769,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={TEXT_ANCHOR}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -752,6 +799,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -784,6 +833,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -808,6 +859,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={(n) => {
           switchCalls.push(n);
@@ -834,6 +887,8 @@ describe("CommentSidebar", () => {
         refreshKey={0}
         pendingAnchor={null}
         onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -870,5 +925,267 @@ describe("BoardView live updates", () => {
     await act(async () => {});
     expect(getCommentsCalls.length).toBeGreaterThan(initial);
     clearSessionToken();
+  });
+});
+
+// React controlled-input helper: write via the prototype's native setter (not
+// the element's, which React wraps with a value tracker), then drop the stale
+// tracker so updateValueIfChanged sees the change when the input event lands.
+function typeInto(field: Element, text: string): void {
+  const proto =
+    field instanceof window.HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  setter?.call(field, text);
+  delete (field as unknown as { _valueTracker?: unknown })._valueTracker;
+  field.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+function dropEvent(files: File[]): Event {
+  const event = new window.Event("drop", { bubbles: true }) as Event & {
+    dataTransfer: { files: File[] };
+  };
+  event.dataTransfer = { files };
+  return event;
+}
+
+describe("CommentSidebar image upload", () => {
+  const pngFile = new window.File(
+    [new Uint8Array([0x89, 0x50, 0x4e, 0x47])],
+    "shot.png",
+    { type: "image/png" },
+  );
+
+  test("dropping an image uploads it to /api/assets with the board id and opens the editor", async () => {
+    uploadedAssets.length = 0;
+    uploadAssetError = null;
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const sidebar = container.querySelector("aside.comment-sidebar");
+    expect(sidebar).not.toBe(null);
+    await act(async () => {
+      (sidebar as HTMLElement).dispatchEvent(dropEvent([pngFile]));
+    });
+    expect(uploadedAssets).toEqual([
+      { boardId: "b1", file: expect.anything() },
+    ]);
+    const editor = container.querySelector(".overlay-editor");
+    expect(editor).not.toBe(null);
+    expect(
+      container.querySelector(".overlay-editor-stage img")?.getAttribute("src"),
+    ).toBe("/assets/uploadedAsset");
+  });
+
+  test("editor done → composer holds the pending image anchor; posting sends it", async () => {
+    uploadedAssets.length = 0;
+    createdComments.length = 0;
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    await act(async () => {
+      (
+        container.querySelector("aside.comment-sidebar") as HTMLElement
+      ).dispatchEvent(dropEvent([pngFile]));
+    });
+    const done = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "done",
+    ) as HTMLElement;
+    await act(async () => {
+      done.click();
+    });
+    expect(container.innerHTML).toContain("on image uploadedAsset");
+    const textarea = container.querySelector("textarea") as HTMLElement;
+    await act(async () => {
+      typeInto(textarea, "look at the arrow");
+    });
+    const submit = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Comment",
+    ) as HTMLElement;
+    await act(async () => {
+      submit.click();
+    });
+    expect(createdComments).toHaveLength(1);
+    expect(createdComments[0].boardId).toBe("b1");
+    expect(createdComments[0].input.anchor).toEqual({
+      type: "image",
+      asset_id: "uploadedAsset",
+      overlay: { arrows: [], boxes: [] },
+    });
+    expect(createdComments[0].input.body).toBe("look at the arrow");
+  });
+
+  test("editor cancel discards — no composer, no comment", async () => {
+    uploadedAssets.length = 0;
+    createdComments.length = 0;
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    await act(async () => {
+      (
+        container.querySelector("aside.comment-sidebar") as HTMLElement
+      ).dispatchEvent(dropEvent([pngFile]));
+    });
+    const cancel = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "cancel",
+    ) as HTMLElement;
+    await act(async () => {
+      cancel.click();
+    });
+    expect(container.querySelector(".overlay-editor")).toBe(null);
+    expect(container.querySelector("div.composer")).toBe(null);
+    expect(createdComments).toHaveLength(0);
+  });
+
+  test("upload errors surface in the composer area", async () => {
+    uploadedAssets.length = 0;
+    uploadAssetError = new Error(
+      'asset type not allowed: "image/x-icon" is not on the image allowlist',
+    );
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    await act(async () => {
+      (
+        container.querySelector("aside.comment-sidebar") as HTMLElement
+      ).dispatchEvent(dropEvent([pngFile]));
+    });
+    expect(container.innerHTML).toContain("asset type not allowed");
+    expect(container.querySelector(".overlay-editor")).toBe(null);
+    uploadAssetError = null;
+  });
+});
+
+describe("BoardView image annotation", () => {
+  test("hovering a board image offers annotate; clicking opens an image-anchor composer", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const img = container.querySelector(
+      ".image-anchor-wrap img",
+    ) as HTMLElement;
+    expect(img).not.toBe(null);
+    await act(async () => {
+      img.dispatchEvent(new window.MouseEvent("mouseover", { bubbles: true }));
+    });
+    const button = container.querySelector("button.floating-comment");
+    expect(button?.textContent).toBe("annotate image");
+    await act(async () => {
+      (button as HTMLElement).click();
+    });
+    expect(container.querySelector("div.composer")).not.toBe(null);
+    expect(container.innerHTML).toContain("on image assetImg01");
+    // the composer offers the editor on the already-published asset
+    expect(container.innerHTML).toContain("annotate");
+  });
+
+  test("image-anchored threads badge their image and hover-preview the overlay as svg", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    // badge on the wrapped image (one unresolved image thread)
+    expect(container.querySelector(".image-anchor-badge")?.textContent).toBe(
+      "1",
+    );
+    // hovering the thread's chip mounts the overlay layer on the image
+    const chip = [...container.querySelectorAll("button.anchor-chip")].find(
+      (button) => button.textContent === "image assetImg01",
+    ) as HTMLElement;
+    await act(async () => {
+      chip.dispatchEvent(new window.MouseEvent("mouseover", { bubbles: true }));
+    });
+    const layer = container.querySelector(
+      ".image-overlay-layer",
+    ) as HTMLElement;
+    expect(layer).not.toBe(null);
+    // measure with a known image box → the svg renders in scaled pixel space
+    layer.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 800, height: 400 }) as DOMRect;
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+    });
+    const svg = container.querySelector("svg.image-overlay-svg");
+    expect(svg?.getAttribute("width")).toBe("800");
+    expect(svg?.getAttribute("height")).toBe("400");
+    const line = svg?.querySelector("line");
+    // arrow (0.25, 0.5) → (0.75, 0.5) scaled to the 800×400 box
+    expect(line?.getAttribute("x1")).toBe("200");
+    expect(line?.getAttribute("y1")).toBe("200");
+    expect(line?.getAttribute("x2")).toBe("600");
+    expect(line?.getAttribute("y2")).toBe("200");
+    const text = svg?.querySelector("text");
+    expect(text?.getAttribute("x")).toBe("400");
+    expect(text?.getAttribute("y")).toBe("40");
+    expect(text?.textContent).toBe("watch this");
+    // leaving the chip unmounts the overlay
+    await act(async () => {
+      chip.dispatchEvent(
+        new window.MouseEvent("mouseout", {
+          bubbles: true,
+          relatedTarget: null,
+        }),
+      );
+    });
+    expect(container.querySelector(".image-overlay-layer")).toBe(null);
+  });
+
+  test("an image thread chip click highlights the board image (anchor-target parity)", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const chip = [...container.querySelectorAll("button.anchor-chip")].find(
+      (button) => button.textContent === "image assetImg01",
+    ) as HTMLElement;
+    await act(async () => {
+      chip.click();
+    });
+    const img = container.querySelector(".image-anchor-wrap img");
+    expect(img?.classList.contains("anchor-target")).toBe(true);
   });
 });

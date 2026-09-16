@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ingestAsset } from "./assets.ts";
 import {
   CommentNotFound,
   countUnresolvedRoots,
@@ -37,6 +38,16 @@ alpha beta gamma
 | three | four |
 `;
 
+// In-test png bytes with the real magic signature (no binary fixtures) —
+// ingest verifies magic bytes, so the anchor tests need plausible image bytes.
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+function pngBytes(size = 64): Uint8Array {
+  const bytes = new Uint8Array(size);
+  bytes.set(PNG_MAGIC);
+  return bytes;
+}
+
 let db: Database;
 let dataDir: string;
 let boardId: string;
@@ -66,22 +77,23 @@ afterAll(() => {
 
 describe("validateAnchor", () => {
   test("board anchors are always valid", () => {
-    validateAnchor({ type: "board" }, version);
+    validateAnchor(db, { type: "board" }, version);
   });
 
   test("section anchors resolve against the stored version", () => {
-    validateAnchor({ type: "section", section_id: "b1" }, version);
-    validateAnchor({ type: "section", section_id: "b2" }, version);
+    validateAnchor(db, { type: "section", section_id: "b1" }, version);
+    validateAnchor(db, { type: "section", section_id: "b2" }, version);
   });
 
   test("unknown section id rejects", () => {
     expect(() =>
-      validateAnchor({ type: "section", section_id: "b99" }, version),
+      validateAnchor(db, { type: "section", section_id: "b99" }, version),
     ).toThrow(InvalidAnchor);
   });
 
   test("text anchors validate by quote containment in the section", () => {
     validateAnchor(
+      db,
       {
         type: "text",
         section_id: "b2",
@@ -96,6 +108,7 @@ describe("validateAnchor", () => {
   test("text anchor with a quote absent from the section rejects", () => {
     expect(() =>
       validateAnchor(
+        db,
         {
           type: "text",
           section_id: "b2",
@@ -111,6 +124,7 @@ describe("validateAnchor", () => {
   test("text anchor with an unknown section rejects", () => {
     expect(() =>
       validateAnchor(
+        db,
         {
           type: "text",
           section_id: "b99",
@@ -124,25 +138,206 @@ describe("validateAnchor", () => {
   });
 
   test("row anchors resolve by their row element", () => {
-    validateAnchor({ type: "row", section_id: "b3", row_id: "b3r2" }, version);
+    validateAnchor(
+      db,
+      { type: "row", section_id: "b3", row_id: "b3r2" },
+      version,
+    );
   });
 
   test("unknown row id rejects", () => {
     expect(() =>
       validateAnchor(
+        db,
         { type: "row", section_id: "b3", row_id: "b3r99" },
         version,
       ),
     ).toThrow(InvalidAnchor);
   });
 
-  test("image anchors reject until M6", () => {
+  test("image anchor with an ingested asset and a well-formed overlay passes", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    validateAnchor(
+      db,
+      {
+        type: "image",
+        asset_id: asset.id,
+        overlay: {
+          arrows: [{ x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 }],
+          boxes: [{ x: 0.8, y: 0.1, text: "this label overflows" }],
+        },
+      },
+      version,
+    );
+  });
+
+  test("image anchor without an overlay passes (docs/plan.md: overlay?)", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    validateAnchor(db, { type: "image", asset_id: asset.id }, version);
+  });
+
+  test("image anchor with an unknown asset rejects", () => {
     expect(() =>
       validateAnchor(
-        { type: "image", asset_id: "a1", overlay: { arrows: [], boxes: [] } },
+        db,
+        {
+          type: "image",
+          asset_id: "nosuchasset",
+          overlay: { arrows: [], boxes: [] },
+        },
         version,
       ),
-    ).toThrow(/M6/);
+    ).toThrow(InvalidAnchor);
+  });
+
+  test("image anchor referencing another board's asset rejects", () => {
+    const other = createBoard(db, dataDir, {
+      title: "Asset host",
+      format: "markdown",
+      actor: "agent-1",
+    });
+    const asset = ingestAsset(db, dataDir, other.id, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    expect(() =>
+      validateAnchor(
+        db,
+        {
+          type: "image",
+          asset_id: asset.id,
+          overlay: { arrows: [], boxes: [] },
+        },
+        version,
+      ),
+    ).toThrow(/different board/);
+  });
+
+  test("overlay arrow coordinates outside [0,1] reject", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    for (const bad of [-0.1, 1.1, Number.NaN]) {
+      expect(() =>
+        validateAnchor(
+          db,
+          {
+            type: "image",
+            asset_id: asset.id,
+            overlay: { arrows: [{ x1: bad, y1: 0, x2: 1, y2: 1 }], boxes: [] },
+          },
+          version,
+        ),
+      ).toThrow(InvalidAnchor);
+    }
+  });
+
+  test("overlay box coordinates outside [0,1] reject", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    expect(() =>
+      validateAnchor(
+        db,
+        {
+          type: "image",
+          asset_id: asset.id,
+          overlay: { arrows: [], boxes: [{ x: 1.5, y: 0, text: "x" }] },
+        },
+        version,
+      ),
+    ).toThrow(InvalidAnchor);
+  });
+
+  test("overlay box text over the cap rejects", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    expect(() =>
+      validateAnchor(
+        db,
+        {
+          type: "image",
+          asset_id: asset.id,
+          overlay: {
+            arrows: [],
+            boxes: [{ x: 0.5, y: 0.5, text: "x".repeat(201) }],
+          },
+        },
+        version,
+      ),
+    ).toThrow(/200 char cap/);
+  });
+
+  test("overlay item counts over the cap reject", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    const arrows = Array.from({ length: 51 }, () => ({
+      x1: 0,
+      y1: 0,
+      x2: 1,
+      y2: 1,
+    }));
+    expect(() =>
+      validateAnchor(
+        db,
+        {
+          type: "image",
+          asset_id: asset.id,
+          overlay: { arrows, boxes: [] },
+        },
+        version,
+      ),
+    ).toThrow(/50 item cap/);
+  });
+
+  test("createComment round-trips an image anchor with overlay", () => {
+    const asset = ingestAsset(db, dataDir, boardId, {
+      bytes: pngBytes(),
+      mime: "image/png",
+      source: "binary",
+      actor: "agent-1",
+    });
+    const anchor = {
+      type: "image" as const,
+      asset_id: asset.id,
+      overlay: {
+        arrows: [{ x1: 0, y1: 0, x2: 1, y2: 1 }],
+        boxes: [{ x: 0.5, y: 0.5, text: "note" }],
+      },
+    };
+    const comment = createComment(db, dataDir, boardId, {
+      anchor,
+      body: "see the arrow",
+      version_n: 1,
+      actor: "human",
+    });
+    expect(getComment(db, comment.id)?.anchor).toEqual(anchor);
   });
 });
 

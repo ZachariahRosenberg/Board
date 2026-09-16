@@ -124,6 +124,15 @@ export function getBoardEvents(
   return getEvents(db, { boardId, since });
 }
 
+// Bundle export's audit snapshot needs EVERY row of the board, not a cursor
+// page — the 200 default is a polling page size, not a truth guarantee.
+export function getBoardEventsUnbounded(
+  db: Database,
+  boardId: string,
+): BoardEvent[] {
+  return getEvents(db, { boardId, limit: Number.MAX_SAFE_INTEGER });
+}
+
 function mapEventRow(row: EventRow): BoardEvent {
   return {
     seq: row.seq,

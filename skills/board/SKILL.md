@@ -37,6 +37,7 @@ description: Publish plans and results to the shared board for async human revie
 | `board_status` | daemon liveness + counts | — |
 | `board_subscribe` | registers a webhook for signed event push | board_id, webhook_url, webhook_secret? |
 | `board_upload_image` | copies a local image into a board, verified + sanitized | board_id, path (absolute, on the daemon host) |
+| `board_export` | exports a board as a self-contained zip bundle, base64-encoded | board_id |
 
 ## Images
 
@@ -46,6 +47,38 @@ To put a screenshot or diagram on a board, call `board_upload_image` with the im
 - html boards: `<img src="/assets/<id>">` — reference the URL directly
 
 Never invent asset ids or reference `/assets/<id>` URLs you did not get from the tool — unknown ids render as broken images.
+
+### Annotating an image (overlay schema)
+
+Comments can anchor to an image and carry an **overlay** — arrows and positioned text labels the web UI draws over the image. The anchor is `{type: "image", asset_id, overlay}`; coordinates are **normalized to 0..1 of the displayed image box** (not pixels), so an overlay scales with any layout: `x` is the fraction across the image's width, `y` the fraction down its height, `(0,0)` top-left. Post it as a comment via REST:
+
+```sh
+curl -X POST "http://127.0.0.1:7800/api/boards/<board_id>/comments" \
+  -H "authorization: Bearer $BOARD_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "anchor": {
+      "type": "image",
+      "asset_id": "<asset_id>",
+      "overlay": {
+        "arrows": [{ "x1": 0.3, "y1": 0.4, "x2": 0.55, "y2": 0.4 }],
+        "boxes": [{ "x": 0.6, "y": 0.38, "text": "this label overflows" }]
+      }
+    },
+    "body": "Arrow points at the overflow; label marks the fix.",
+    "version_n": 1
+  }'
+```
+
+- `arrows` — `{x1,y1,x2,y2}`: tail → head coordinates (the head renders at x2,y2).
+- `boxes` — `{x,y,text}`: the label's top-left anchor point plus its text (200-char cap).
+- The overlay may hold only arrows, only boxes, or be omitted entirely for a plain "on image" comment; each list caps at 50 items and every coordinate must be in [0,1].
+- To find coordinates for a local image, read its pixel dimensions and divide: `x = pixel_x / width`, `y = pixel_y / height`.
+
+## Export / import
+
+- `board_export {board_id}` returns the board's bundle — manifest, version sources, comments, assets, event audit snapshot — as a zip **base64-encoded in the result's `data` field** (`encoding: "base64"`, `bytes` = raw zip length). Decode and save: e.g. `echo "<data>" | base64 -d > <board_id>.zip`, then write it where the human asked. Bundles over 8 MB are refused by the tool — fetch `GET /api/boards/<id>/export` over REST instead.
+- Import (`POST /api/boards/import` with the raw zip, or `board import <file>` / `make import <file>`) is a human/CLI surface — it always mints a NEW board id and re-runs the quarantine pipeline, so embeds and comments survive but ids change. Never assume an imported board keeps its old asset or comment ids.
 
 ## Consumption rule — exactly one
 

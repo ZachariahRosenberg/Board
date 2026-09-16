@@ -1,4 +1,4 @@
-.PHONY: deps install test typecheck lint serve dev token web open
+.PHONY: deps install test typecheck lint serve dev token web open list export import
 
 deps:
 	bun install
@@ -50,3 +50,16 @@ web:
 # `make open [ID]` — open the web UI in a browser via a one-time exchange token
 open:
 	bun run cli/src/main.ts open $(filter-out $@,$(MAKECMDGOALS))
+
+# `make list` — boards with status/version/unresolved counts (needs a token:
+# pass BOARD_TOKEN in the env or run the CLI directly with --token)
+list:
+	bun run cli/src/main.ts list $(filter-out $@,$(MAKECMDGOALS))
+
+# `make export <ID> [FILE]` — save a board bundle as a zip (default <ID>.zip)
+export:
+	bun run cli/src/main.ts export $(filter-out $@,$(MAKECMDGOALS))
+
+# `make import <FILE>` — recreate a board from a bundle under a fresh board id
+import:
+	bun run cli/src/main.ts import $(filter-out $@,$(MAKECMDGOALS))

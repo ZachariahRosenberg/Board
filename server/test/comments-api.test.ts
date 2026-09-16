@@ -423,3 +423,80 @@ async function postComment(
   expect(res.status).toBe(201);
   return json<CommentJson>(res);
 }
+
+describe("image anchors over the comments API", () => {
+  test("comment with an image anchor + overlay posts and reads back", async () => {
+    const board = await makeBoard("Image anchors", agent.token, s.api);
+    // ingest a real png through the binary asset route
+    const bytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    const upload = await fetch(`${s.hostUrl}/api/assets?board_id=${board}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${agent.token}`,
+        "content-type": "image/png",
+      },
+      body: bytes,
+    });
+    expect(upload.status).toBe(201);
+    const asset = (await upload.json()) as { id: string };
+    const anchor = {
+      type: "image",
+      asset_id: asset.id,
+      overlay: {
+        arrows: [{ x1: 0.25, y1: 0.5, x2: 0.75, y2: 0.5 }],
+        boxes: [{ x: 0.8, y: 0.1, text: "label" }],
+      },
+    };
+    const created = await s.api.post(
+      `/api/boards/${board}/comments`,
+      { anchor, body: "see the arrow", version_n: 1 },
+      { token: commenter.token },
+    );
+    expect(created.status).toBe(201);
+    expect((await json<CommentJson>(created)).anchor).toEqual(anchor);
+  });
+
+  test("overlay coordinates outside [0,1] map to 400 invalid_anchor", async () => {
+    const board = await makeBoard("Image anchor bounds", agent.token, s.api);
+    const res = await s.api.post(
+      `/api/boards/${board}/comments`,
+      {
+        anchor: {
+          type: "image",
+          asset_id: "whatever123",
+          overlay: { arrows: [{ x1: 1.5, y1: 0, x2: 0, y2: 0 }], boxes: [] },
+        },
+        body: "x",
+        version_n: 1,
+      },
+      { token: agent.token },
+    );
+    expect(res.status).toBe(400);
+    expect((await json<{ error: { code: string } }>(res)).error.code).toBe(
+      "invalid_anchor",
+    );
+  });
+
+  test("malformed overlay shape maps to 400 invalid_request", async () => {
+    const board = await makeBoard("Image anchor shape", agent.token, s.api);
+    const res = await s.api.post(
+      `/api/boards/${board}/comments`,
+      {
+        anchor: {
+          type: "image",
+          asset_id: "whatever123",
+          overlay: { arrows: "nope", boxes: [] },
+        },
+        body: "x",
+        version_n: 1,
+      },
+      { token: agent.token },
+    );
+    expect(res.status).toBe(400);
+    expect((await json<{ error: { code: string } }>(res)).error.code).toBe(
+      "invalid_request",
+    );
+  });
+});

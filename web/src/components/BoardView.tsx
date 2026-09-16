@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { Anchor, Version } from "../../../server/src/domain.ts";
+import { createPortal } from "react-dom";
+import type {
+  Anchor,
+  Comment,
+  ImageAnchor,
+  ImageOverlay,
+  Version,
+} from "../../../server/src/domain.ts";
 import {
   anchorForElement,
   anchorFromSelection,
@@ -13,8 +20,10 @@ import {
 } from "../api.ts";
 import { mountBoardDocument } from "../board-mount.ts";
 import { formatDate } from "../format.ts";
+import { assetIdFromSrc } from "../image.ts";
 import { BoardStream } from "../sse.ts";
 import { CommentSidebar } from "./CommentSidebar.tsx";
+import { ImageOverlayLayer } from "./ImageOverlaySvg.tsx";
 
 // Markdown content was sanitized server-side at publish (script-free by
 // construction) — injecting it here IS the sanctioned host-chrome display
@@ -40,6 +49,16 @@ export function BoardView({ id }: { id: string }) {
   const [affordance, setAffordance] = useState<Affordance | null>(null);
   const [pendingAnchor, setPendingAnchor] = useState<Anchor | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // image annotation: the sidebar streams comments up; image-anchored threads
+  // badge their board image and hover-preview the overlay on it
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [imageTargets, setImageTargets] = useState<Record<string, HTMLElement>>(
+    {},
+  );
+  const [activeImage, setActiveImage] = useState<{
+    anchor: ImageAnchor;
+    overlay: ImageOverlay;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hoverTargetRef = useRef<Element | null>(null);
   // The floating button pins the affordance while the pointer is on it —
@@ -147,6 +166,36 @@ export function BoardView({ id }: { id: string }) {
     void mountBoardDocument(version.content, root);
   }, [version, data]);
 
+  // Board images (markdown embeds and agent html alike) get wrapped so
+  // badges and hover overlays can portal into a positioned box hugging the
+  // image. Runs after content injection (markdown innerHTML commits during
+  // render; the html mount's synchronous prefix appends body children before
+  // its first await). The wrap span is ours — React only replaces the
+  // container wholesale on version change, and the effect re-runs on that.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version/data are intentional re-run triggers — the listeners rebind when the content DOM is replaced
+  useEffect(() => {
+    const root = containerRef.current;
+    if (root === null || version === null) {
+      return;
+    }
+    const targets: Record<string, HTMLElement> = {};
+    for (const img of [...root.querySelectorAll("img")]) {
+      const assetId = assetIdFromSrc(img.getAttribute("src") ?? "");
+      if (assetId === null) {
+        continue;
+      }
+      let wrap = img.parentElement;
+      if (wrap === null || !wrap.classList.contains("image-anchor-wrap")) {
+        wrap = root.ownerDocument.createElement("span");
+        wrap.className = "image-anchor-wrap";
+        img.replaceWith(wrap);
+        wrap.append(img);
+      }
+      targets[assetId] = wrap;
+    }
+    setImageTargets(targets);
+  }, [version, data]);
+
   // Live updates (SSE): any event for this board refreshes comments; board
   // lifecycle events also refresh the board meta. Reconnect is EventSource's.
   useEffect(() => {
@@ -226,43 +275,67 @@ export function BoardView({ id }: { id: string }) {
     };
   }, []);
 
-  // Hover affordance: one comment button on the [data-ba] element under the
-  // pointer — sections get section anchors, table rows get row anchors.
+  // Hover affordance: one comment button under the pointer — asset images
+  // get the annotate affordance (image anchors), other [data-ba] elements
+  // get sections/rows.
   // biome-ignore lint/correctness/useExhaustiveDependencies: version/data are intentional re-run triggers — the listeners rebind when the content DOM is replaced
   useEffect(() => {
     const root = containerRef.current;
     if (root === null) {
       return;
     }
-    const closest = (event: Event): Element | null => {
+    const closest = (
+      event: Event,
+    ): { anchor: Anchor; el: Element; label: string } | null => {
       const target = event.target as Element | null;
       if (target === null || typeof target.closest !== "function") {
         return null;
       }
-      return target.closest("[data-ba]");
+      // an asset image wins over its surrounding section: the annotation
+      // targets the image itself
+      const img = target.closest("img");
+      if (img !== null) {
+        const assetId = assetIdFromSrc(img.getAttribute("src") ?? "");
+        if (assetId !== null) {
+          return {
+            anchor: { type: "image", asset_id: assetId },
+            el: img,
+            label: "annotate image",
+          };
+        }
+      }
+      const el = target.closest("[data-ba]");
+      if (el === null) {
+        return null;
+      }
+      return {
+        anchor: anchorForElement(el),
+        el,
+        label: el.tagName === "TR" ? "Comment on row" : "Comment on section",
+      };
     };
     const onMouseOver = (event: Event): void => {
       if (selectionActiveRef.current) {
         return;
       }
-      const el = closest(event);
+      const found = closest(event);
+      const el = found?.el ?? null;
       if (el === hoverTargetRef.current) {
         return;
       }
       hoverTargetRef.current = el;
-      if (el === null || !root.contains(el)) {
+      if (found === null || !root.contains(found.el)) {
         if (!pinnedRef.current) {
           setAffordance(null);
         }
         return;
       }
-      const anchor = anchorForElement(el);
-      const rect = el.getBoundingClientRect();
+      const rect = found.el.getBoundingClientRect();
       setAffordance({
-        anchor,
+        anchor: found.anchor,
         top: rect.top + 2,
         left: rect.right - 6,
-        label: el.tagName === "TR" ? "Comment on row" : "Comment on section",
+        label: found.label,
       });
     };
     const onMouseOut = (event: MouseEvent): void => {
@@ -361,8 +434,36 @@ export function BoardView({ id }: { id: string }) {
           onSwitchVersion={(n) => {
             setSelected(n);
           }}
+          onCommentsChange={setComments}
+          onImageHover={(anchor) => {
+            if (anchor === null || anchor.overlay === undefined) {
+              setActiveImage(null);
+              return;
+            }
+            setActiveImage({ anchor, overlay: anchor.overlay });
+          }}
         />
       </div>
+      {/* badges + hover overlays portal into each wrapped board image */}
+      {Object.entries(imageTargets).map(([assetId, target]) => {
+        const threads = comments.filter(
+          (comment) =>
+            comment.in_reply_to === null &&
+            comment.anchor.type === "image" &&
+            comment.anchor.asset_id === assetId,
+        );
+        const overlay =
+          activeImage?.anchor.asset_id === assetId ? activeImage.overlay : null;
+        return createPortal(
+          <>
+            {threads.length > 0 && (
+              <span className="image-anchor-badge">{threads.length}</span>
+            )}
+            {overlay !== null && <ImageOverlayLayer overlay={overlay} />}
+          </>,
+          target,
+        );
+      })}
       {affordance !== null && board.status === "open" && (
         <button
           type="button"

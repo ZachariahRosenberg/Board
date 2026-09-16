@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   Anchor,
   BoardStatus,
   Comment,
+  ImageAnchor,
 } from "../../../server/src/domain.ts";
 import { anchorDescriptor, BOARD_ANCHOR } from "../anchor.ts";
 import {
@@ -10,8 +11,10 @@ import {
   getComments,
   replyComment,
   resolveComment,
+  uploadAsset,
 } from "../api.ts";
 import { formatDate } from "../format.ts";
+import { ImageOverlayEditor } from "./ImageOverlayEditor.tsx";
 
 interface ComposerState {
   anchor: Anchor;
@@ -27,6 +30,11 @@ interface CommentSidebarProps {
   onPendingAnchorConsumed(): void;
   onHighlight(anchor: Anchor): void;
   onSwitchVersion(n: number): void;
+  // image-anchored threads stream up so the board view can badge their
+  // images and render hover overlays (the sidebar owns the comment fetch)
+  onCommentsChange(comments: Comment[]): void;
+  // hovering an image thread's chip previews its overlay on the board image
+  onImageHover(anchor: ImageAnchor | null): void;
 }
 
 function authorLabel(author: string): string {
@@ -37,9 +45,19 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
-  const [body, setBody] = useState("");
+  // the body lives in the textarea (uncontrolled) — read at submit/clear.
+  // React's input→onChange mapping is feature-detected at module init and
+  // cannot be synthesized under happy-dom, so a controlled body would make
+  // the submit path untestable with plain dispatched events; bodyEmpty only
+  // drives the disabled state and resets via onInput
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [bodyEmpty, setBodyEmpty] = useState(true);
   const [busy, setBusy] = useState(false);
   const [hideResolved, setHideResolved] = useState(false);
+  // image annotation state: an open overlay editor + the upload affordances
+  const [editor, setEditor] = useState<{ assetId: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dropping, setDropping] = useState(false);
 
   const boardOpen = props.boardStatus === "open";
 
@@ -47,6 +65,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     try {
       const page = await getComments(props.boardId);
       setComments(page.comments);
+      props.onCommentsChange(page.comments);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to load comments");
@@ -62,16 +81,32 @@ export function CommentSidebar(props: CommentSidebarProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: consume-once on pendingAnchor changes; the callback is a stable parent setter
   useEffect(() => {
     if (props.pendingAnchor !== null) {
-      setComposer({ anchor: props.pendingAnchor, replyTo: null });
-      setBody("");
+      openComposer({ anchor: props.pendingAnchor, replyTo: null });
       props.onPendingAnchorConsumed();
     }
   }, [props.pendingAnchor]);
 
+  // Every composer open/swap remounts the textarea (key = composerKey) — the
+  // uncontrolled body starts empty, matching the old controlled setBody("").
+  const [composerKey, setComposerKey] = useState(0);
+  const openComposer = (state: ComposerState): void => {
+    setComposer(state);
+    setComposerKey((key) => key + 1);
+    setBodyEmpty(true);
+  };
+
+  const clearBody = (): void => {
+    if (bodyRef.current !== null) {
+      bodyRef.current.value = "";
+    }
+    setBodyEmpty(true);
+  };
+
   const submit = async (): Promise<void> => {
+    const text = (bodyRef.current?.value ?? "").trim();
     if (
       composer === null ||
-      body.trim().length === 0 ||
+      text.length === 0 ||
       busy ||
       props.versionN === null
     ) {
@@ -82,14 +117,14 @@ export function CommentSidebar(props: CommentSidebarProps) {
       if (composer.replyTo === null) {
         await createComment(props.boardId, {
           anchor: composer.anchor,
-          body: body.trim(),
+          body: text,
           version_n: props.versionN,
         });
       } else {
-        await replyComment(composer.replyTo.id, body.trim());
+        await replyComment(composer.replyTo.id, text);
       }
       setComposer(null);
-      setBody("");
+      clearBody();
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "comment failed");
@@ -104,6 +139,42 @@ export function CommentSidebar(props: CommentSidebarProps) {
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "resolve failed");
+    }
+  };
+
+  // Human image ingest (docs/plan.md: drag/drop in the UI): upload the file,
+  // then open the overlay editor on the stored asset. Errors surface in the
+  // composer like every other failure (non-image, over-cap → server 4xx).
+  const uploadAndEdit = (file: File): void => {
+    if (!boardOpen || uploading) {
+      return;
+    }
+    setUploading(true);
+    uploadAsset(props.boardId, file)
+      .then((asset) => {
+        setError(null);
+        setEditor({ assetId: asset.id });
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "upload failed");
+      })
+      .finally(() => {
+        setUploading(false);
+      });
+  };
+
+  const onDrop = (event: React.DragEvent): void => {
+    setDropping(false);
+    if (!boardOpen) {
+      return;
+    }
+    const file = [...event.dataTransfer.files].find((candidate) =>
+      candidate.type.startsWith("image/"),
+    );
+    if (file !== undefined) {
+      // the composer is not a drop target for anything but images
+      event.preventDefault();
+      uploadAndEdit(file);
     }
   };
 
@@ -142,9 +213,33 @@ export function CommentSidebar(props: CommentSidebarProps) {
           comment.in_reply_to !== null && rootOf(comment)?.id === root.id,
       )
       .sort((a, b) => a.seq - b.seq);
+  // the composer's image anchor when a root comment is being written —
+  // extracted so the annotate button's closure keeps the narrowed type
+  const pendingImage =
+    composer !== null &&
+    composer.replyTo === null &&
+    composer.anchor.type === "image"
+      ? composer.anchor
+      : null;
 
   return (
-    <aside className="comment-sidebar">
+    <aside
+      className={`comment-sidebar${dropping ? " drop-target" : ""}`}
+      onDragOver={(event) => {
+        // preventDefault is what licenses the drop in a browser
+        if (
+          boardOpen &&
+          [...event.dataTransfer.items].some((item) => item.kind === "file")
+        ) {
+          event.preventDefault();
+          setDropping(true);
+        }
+      }}
+      onDragLeave={() => {
+        setDropping(false);
+      }}
+      onDrop={onDrop}
+    >
       <header className="sidebar-header">
         <span className="sidebar-title">Comments</span>
         <span className="sidebar-count">
@@ -155,8 +250,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
             type="button"
             className="pill"
             onClick={() => {
-              setComposer({ anchor: BOARD_ANCHOR, replyTo: null });
-              setBody("");
+              openComposer({ anchor: BOARD_ANCHOR, replyTo: null });
             }}
           >
             + board
@@ -203,9 +297,9 @@ export function CommentSidebar(props: CommentSidebarProps) {
                 void resolve(commentId);
               }}
               onReply={(comment) => {
-                setComposer({ anchor: comment.anchor, replyTo: comment });
-                setBody("");
+                openComposer({ anchor: comment.anchor, replyTo: comment });
               }}
+              onImageHover={props.onImageHover}
             />
           ))}
         </div>
@@ -226,12 +320,27 @@ export function CommentSidebar(props: CommentSidebarProps) {
               “{composer.anchor.originalText}”
             </blockquote>
           )}
+          {pendingImage !== null && (
+            <button
+              type="button"
+              className="pill"
+              onClick={() => {
+                setEditor({ assetId: pendingImage.asset_id });
+              }}
+            >
+              annotate
+            </button>
+          )}
           <textarea
-            value={body}
+            key={composerKey}
+            ref={bodyRef}
             rows={3}
+            defaultValue=""
             placeholder={composer.replyTo === null ? "comment…" : "reply…"}
-            onChange={(event) => {
-              setBody(event.target.value);
+            onInput={(event) => {
+              setBodyEmpty(
+                (event.target as HTMLTextAreaElement).value.trim().length === 0,
+              );
             }}
             onKeyDown={(event) => {
               // Enter submits, Shift+Enter inserts a newline (GitHub-style
@@ -245,25 +354,57 @@ export function CommentSidebar(props: CommentSidebarProps) {
           <div className="composer-actions">
             <button
               type="button"
-              disabled={busy || body.trim().length === 0}
+              disabled={busy || bodyEmpty}
               onClick={() => {
                 void submit();
               }}
             >
               {busy ? "sending…" : "Comment"}
             </button>
+            {/* click-path twin of drag/drop: same upload + editor flow */}
+            <label className={`pill attach-image${uploading ? " busy" : ""}`}>
+              {uploading ? "uploading…" : "attach image"}
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  // reset so picking the same file twice re-fires change
+                  event.target.value = "";
+                  if (file !== undefined) {
+                    uploadAndEdit(file);
+                  }
+                }}
+              />
+            </label>
             <button
               type="button"
               className="linklike"
               onClick={() => {
                 setComposer(null);
-                setBody("");
               }}
             >
               cancel
             </button>
           </div>
         </div>
+      )}
+      {editor !== null && boardOpen && (
+        <ImageOverlayEditor
+          assetId={editor.assetId}
+          onDone={(overlay) => {
+            // replies inherit the parent's anchor — a finished overlay always
+            // lands as a root comment, replacing any open composer
+            openComposer({
+              anchor: { type: "image", asset_id: editor.assetId, overlay },
+              replyTo: null,
+            });
+            setEditor(null);
+          }}
+          onCancel={() => {
+            setEditor(null);
+          }}
+        />
       )}
     </aside>
   );
@@ -278,10 +419,13 @@ interface ThreadViewProps {
   onSwitchVersion(version: number): void;
   onResolve(commentId: string): void;
   onReply(comment: Comment): void;
+  onImageHover(anchor: ImageAnchor | null): void;
 }
 
 function ThreadView(props: ThreadViewProps) {
   const { root } = props;
+  // captured so the hover closures keep the narrowed ImageAnchor type
+  const imageAnchor = root.anchor.type === "image" ? root.anchor : null;
   return (
     <div className={`thread${root.resolved_at !== null ? " resolved" : ""}`}>
       <button
@@ -290,6 +434,20 @@ function ThreadView(props: ThreadViewProps) {
         onClick={() => {
           props.onHighlight(root.anchor);
         }}
+        onMouseEnter={
+          imageAnchor === null
+            ? undefined
+            : () => {
+                props.onImageHover(imageAnchor);
+              }
+        }
+        onMouseLeave={
+          imageAnchor === null
+            ? undefined
+            : () => {
+                props.onImageHover(null);
+              }
+        }
       >
         {anchorDescriptor(root.anchor)}
       </button>

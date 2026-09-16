@@ -1,4 +1,4 @@
-// MCP Streamable HTTP endpoint (M5-lite, D16): twelve tools mapping 1:1 onto the
+// MCP Streamable HTTP endpoint (M5-lite, D16): thirteen tools mapping 1:1 onto the
 // service layer — the same functions the REST routes call, so the event log
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
@@ -11,6 +11,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ingestAssetFromPath } from "./assets.ts";
 import { resolveRequestToken } from "./auth.ts";
+import { buildBundle } from "./bundle.ts";
 import {
   countUnresolvedRoots,
   listComments,
@@ -31,13 +32,20 @@ import {
   listVersions,
   publishVersion,
   restoreVersion,
+  StoreError,
   VersionConflict,
 } from "./store.ts";
 import { verifyToken } from "./tokens.ts";
 import { subscribeWebhook } from "./webhooks.ts";
 
 const MCP_SERVER_NAME = "board";
-const MCP_SERVER_VERSION = "0.6.0";
+const MCP_SERVER_VERSION = "0.7.0";
+
+// MCP export carries the zip base64-encoded through JSON (≈ ×4/3 inflation).
+// The daemon's 8 MB body-cap convention bounds it: bigger bundles go through
+// REST GET /boards/:id/export, which streams the raw zip — the tool error
+// says exactly that.
+const MCP_EXPORT_MAX_BYTES = 8 * 1024 * 1024;
 
 interface McpContext {
   db: Database;
@@ -378,6 +386,31 @@ function registerBoardTools(
           size: asset.size,
           embed_markdown: `![image](asset:${asset.id})`,
           embed_html: `<img src="/assets/${asset.id}">`,
+        });
+      }),
+  );
+
+  server.registerTool(
+    "board_export",
+    {
+      description:
+        "Export a board as a self-contained zip bundle (manifest, version sources, comments, assets, event audit snapshot), base64-encoded in the `data` field of the result — decode it and save as <board_id>.zip. Works on ended boards; bundles over 8 MB must use REST GET /api/boards/:id/export instead.",
+      inputSchema: { board_id: z.string() },
+    },
+    ({ board_id }) =>
+      run(() => {
+        requireBoard(db, board_id);
+        const zip = buildBundle(db, dataDir, board_id);
+        if (zip.byteLength > MCP_EXPORT_MAX_BYTES) {
+          throw new StoreError(
+            `bundle for board "${board_id}" is ${zip.byteLength} bytes, over the ${MCP_EXPORT_MAX_BYTES} byte MCP export cap — use REST GET /api/boards/${board_id}/export`,
+          );
+        }
+        return textResult({
+          board_id,
+          bytes: zip.byteLength,
+          encoding: "base64",
+          data: Buffer.from(zip).toString("base64"),
         });
       }),
   );

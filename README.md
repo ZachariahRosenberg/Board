@@ -60,6 +60,9 @@ make web                   # build the web app (once, and after UI changes)
 make install               # wire the board MCP server into your agents (mints tokens)
 make serve                 # daemon on 127.0.0.1:7800
 make open                  # open the web UI in your browser (one-time session token)
+make list                  # boards with status, version, unresolved counts
+make export ID=<id>        # self-contained zip bundle of a board
+make import FILE=<id>.zip  # recreate a board from a bundle (D18 quarantine re-runs)
 ```
 
 Then, as an agent (or curl):

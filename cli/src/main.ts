@@ -2,6 +2,7 @@
 
 import { loadConfig } from "../../server/src/config.ts";
 import { openDb } from "../../server/src/db.ts";
+import { runBoardsCommand } from "./commands/boards.ts";
 import {
   INSTALL_USAGE,
   parseInstallArgs,
@@ -25,11 +26,14 @@ commands:
   token list           list tokens: name, created, last used, revoked
   token revoke <name>  revoke an agent token
   install              wire the board MCP server into local agents (mints tokens)
-  list                 (not yet implemented)
+  list                 list boards: status, current version, unresolved comments
   open [board id]      open the web UI in a browser (one-time token)
-  export               (not yet implemented)
-  import               (not yet implemented)
+  export <id> [file]   save a board bundle as a zip (default <id>.zip)
+  import <file>        recreate a board from a bundle under a fresh board id
   status               (not yet implemented)
+
+REST commands (list/export/import) authenticate with --token <token> or
+BOARD_TOKEN; mint one with: make token add cli
 `;
 
 export function usage(): string {
@@ -47,7 +51,7 @@ function consoleIo(): CommandIo {
   };
 }
 
-export function main(argv: string[]): number {
+export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
@@ -108,6 +112,17 @@ export function main(argv: string[]): number {
         db.close();
       }
     }
+    case "list":
+    case "export":
+    case "import": {
+      // REST against the live daemon — deliberately no local db here: import
+      // is a write and every write goes through the daemon API (invariant 3).
+      return await runBoardsCommand(command, {
+        config: loadConfig(),
+        argv: rest,
+        io: consoleIo(),
+      });
+    }
     default:
       console.error(`board: unknown command "${command}"`);
       console.error(USAGE);
@@ -116,5 +131,5 @@ export function main(argv: string[]): number {
 }
 
 if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 }

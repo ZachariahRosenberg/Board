@@ -10,6 +10,7 @@ const DOC = "# Plan\n\nA paragraph of substance.\n";
 const TOOL_NAMES = [
   "board_create",
   "board_end",
+  "board_export",
   "board_get",
   "board_get_comments",
   "board_list",
@@ -86,7 +87,7 @@ async function errorCodeOf(res: Response): Promise<string> {
 }
 
 describe("mcp endpoint", () => {
-  test("handshake reports board server info and exactly the twelve tools", async () => {
+  test("handshake reports board server info and exactly the thirteen tools", async () => {
     const s = server();
     const agent = await s.createAgent("handshake-agent");
     const client = await connectClient(s, { headerToken: agent.token });
@@ -519,7 +520,7 @@ describe("mcp auth", () => {
     const client = await connectClient(s, { queryToken: agent.token });
     try {
       const tools = await client.listTools();
-      expect(tools.tools).toHaveLength(12);
+      expect(tools.tools).toHaveLength(13);
     } finally {
       await client.close();
     }

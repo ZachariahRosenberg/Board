@@ -37,6 +37,12 @@ export class StubEventSource {
 // FETCHING is disabled: happy-dom would really try to load src scripts (and
 // fail with ECONNREFUSED noise), firing its own error events that race the
 // tests' deterministic load dispatches. Production browsers fetch normally.
+//
+// Components under test read input values from refs and rely only on
+// SimpleEventPlugin events (click/mouse/key) — React's input→onChange
+// mapping is feature-detected at react-dom module init in an environment
+// test files cannot control (bun evaluates module bodies in unobservable
+// order), so controlled inputs are never driven in tests.
 export function installDom(): Window {
   const window = new Window({
     url: "http://127.0.0.1:5173/",

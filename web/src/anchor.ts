@@ -4,6 +4,7 @@ import type {
   SectionAnchor,
   TextAnchor,
 } from "../../server/src/domain.ts";
+import { assetIdFromSrc } from "./image.ts";
 
 export const BOARD_ANCHOR: Anchor = { type: "board" };
 
@@ -169,6 +170,21 @@ function markTextRange(
   el.classList.add("anchor-target");
 }
 
+// Find a board image by asset id — iterating srcs instead of building a
+// selector from the id (injection surface, same rule as server-side data-ba
+// lookups).
+function findAssetImage(
+  root: Element,
+  assetId: string,
+): HTMLImageElement | null {
+  for (const img of root.querySelectorAll("img")) {
+    if (assetIdFromSrc(img.getAttribute("src") ?? "") === assetId) {
+      return img;
+    }
+  }
+  return null;
+}
+
 // Scroll to the anchor and mark it. Text anchors re-anchor QUOTE-FIRST: the
 // stored quote is the truth and the offsets are a hint from the version of
 // record — after an edit, blind offsets highlight whatever text now sits at
@@ -186,6 +202,13 @@ export function highlightAnchor(anchor: Anchor, root: Element | null): void {
     return;
   }
   if (anchor.type === "image") {
+    // highlight parity with section/row targets: the image is the target —
+    // outline it; the overlay itself renders on thread hover in the sidebar
+    const img = findAssetImage(root, anchor.asset_id);
+    if (img !== null) {
+      img.scrollIntoView({ behavior: "smooth", block: "center" });
+      img.classList.add("anchor-target");
+    }
     return;
   }
   const id = anchor.type === "row" ? anchor.row_id : anchor.section_id;

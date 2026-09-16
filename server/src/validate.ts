@@ -1,4 +1,4 @@
-import type { Anchor } from "./domain.ts";
+import type { Anchor, ImageAnchor, ImageOverlay } from "./domain.ts";
 import { HttpError } from "./http.ts";
 
 // Boundary validation (style guide): parse external input into typed values
@@ -71,9 +71,54 @@ export function asNonNegativeIntString(
   return Number(raw);
 }
 
+function asNumber(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw invalid(field, "a finite number");
+  }
+  return value;
+}
+
+// Overlay shape (docs/plan.md "Image annotation"): arrows + positioned-label
+// boxes. Type shapes only — coordinate ranges, caps, and asset existence are
+// semantic checks in the comments store (same split as section ids).
+function asImageOverlay(value: unknown, field: string): ImageOverlay {
+  if (typeof value !== "object" || value === null) {
+    throw invalid(field, "an overlay object");
+  }
+  const obj = value as Record<string, unknown>;
+  if (!Array.isArray(obj.arrows) || !Array.isArray(obj.boxes)) {
+    throw invalid(`${field}.arrows/boxes`, "arrays");
+  }
+  return {
+    arrows: obj.arrows.map((entry, i) => {
+      if (typeof entry !== "object" || entry === null) {
+        throw invalid(`${field}.arrows[${i}]`, "an arrow object");
+      }
+      const arrow = entry as Record<string, unknown>;
+      return {
+        x1: asNumber(arrow.x1, `${field}.arrows[${i}].x1`),
+        y1: asNumber(arrow.y1, `${field}.arrows[${i}].y1`),
+        x2: asNumber(arrow.x2, `${field}.arrows[${i}].x2`),
+        y2: asNumber(arrow.y2, `${field}.arrows[${i}].y2`),
+      };
+    }),
+    boxes: obj.boxes.map((entry, i) => {
+      if (typeof entry !== "object" || entry === null) {
+        throw invalid(`${field}.boxes[${i}]`, "a box object");
+      }
+      const box = entry as Record<string, unknown>;
+      return {
+        x: asNumber(box.x, `${field}.boxes[${i}].x`),
+        y: asNumber(box.y, `${field}.boxes[${i}].y`),
+        text: asString(box.text, `${field}.boxes[${i}].text`),
+      };
+    }),
+  };
+}
+
 // Anchor JSON from the wire, discriminated by `type` (docs/plan.md "Data model").
-// Shape-level only — semantic validity (does the section exist?) is the
-// comments store's job against the stored version.
+// Shape-level only — semantic validity (does the section exist? is the asset on
+// this board? are overlay coordinates in range?) is the comments store's job.
 export function asAnchor(value: unknown, field: string): Anchor {
   if (typeof value !== "object" || value === null) {
     throw invalid(field, "an anchor object");
@@ -101,11 +146,18 @@ export function asAnchor(value: unknown, field: string): Anchor {
         section_id: asString(obj.section_id, `${field}.section_id`),
         row_id: asString(obj.row_id, `${field}.row_id`),
       };
-    case "image":
-      return {
+    case "image": {
+      const anchor: ImageAnchor = {
         type: "image",
         asset_id: asString(obj.asset_id, `${field}.asset_id`),
       };
+      // overlay is optional (docs/plan.md anchor model: `overlay?`) — present
+      // or absent, semantic validation happens in the comments store
+      if (obj.overlay !== undefined) {
+        anchor.overlay = asImageOverlay(obj.overlay, `${field}.overlay`);
+      }
+      return anchor;
+    }
     default:
       throw invalid(
         `${field}.type`,

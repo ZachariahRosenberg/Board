@@ -1,4 +1,5 @@
 import type {
+  Asset,
   Board,
   Comment,
   Version,
@@ -163,4 +164,16 @@ export function getComments(
 export function streamUrl(): string {
   const token = getSessionToken();
   return token === null ? "" : `/api/stream?token=${encodeURIComponent(token)}`;
+}
+
+// Binary asset upload (the human drop/attach path): raw image bytes with the
+// file's own mime — the daemon's binary variant is keyed on ?board_id= (raw
+// bytes cannot also carry a JSON envelope). A non-image or over-cap file is
+// rejected server-side; the ApiError surfaces in the composer.
+export function uploadAsset(boardId: string, file: File): Promise<Asset> {
+  return apiFetch<Asset>(`/api/assets?board_id=${boardId}`, {
+    method: "POST",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: file,
+  });
 }

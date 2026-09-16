@@ -1,3 +1,4 @@
+import { buildBundle, importBoard, readImportBody } from "../bundle.ts";
 import { countUnresolvedRoots } from "../comments.ts";
 import type { Board, BoardStatus } from "../domain.ts";
 import { HttpError, jsonOk } from "../http.ts";
@@ -158,9 +159,53 @@ async function restoreHandler(
   return jsonOk(version, 201);
 }
 
+// Export is a read: bearer-authed like every /api read, and allowed on ended
+// boards (end → writes 409, reads stay — docs/plan.md).
+function exportHandler(_req: Request, ctx: RequestContext): Response {
+  const id = ctx.params.id;
+  if (getBoard(ctx.db, id) === null) {
+    throw new BoardNotFound(id);
+  }
+  const zip = buildBundle(ctx.db, ctx.dataDir, id);
+  // Uint8Array.from copies into an ArrayBuffer-backed body (Response wants
+  // Uint8Array<ArrayBuffer>; boards are small — buffering is the deal)
+  return new Response(Uint8Array.from(zip), {
+    headers: {
+      "content-type": "application/zip",
+      "content-disposition": `attachment; filename="${id}.zip"`,
+    },
+  });
+}
+
+// Import (M6, docs/plan.md): the raw zip IS the body — no JSON envelope can
+// carry binary bytes, hence rawBody. Auth applies to both principals (agent
+// or human); the D18 quarantine (re-render, re-verify, strict manifest) is
+// all in importBoard (docs/security.md "Import quarantine").
+async function importHandler(
+  req: Request,
+  ctx: RequestContext,
+): Promise<Response> {
+  const zipBytes = await readImportBody(req);
+  const board = await importBoard(
+    ctx.db,
+    ctx.dataDir,
+    zipBytes,
+    actorName(ctx),
+  );
+  return jsonOk(board, 201);
+}
+
 export const boardRoutes: Route[] = [
   { method: "GET", path: "/api/boards", handler: listBoardsHandler },
   { method: "POST", path: "/api/boards", handler: createBoardHandler },
+  // literal before parameter patterns: "/import" must never read as an :id
+  // if a future POST /api/boards/:id route lands
+  {
+    method: "POST",
+    path: "/api/boards/import",
+    handler: importHandler,
+    rawBody: true,
+  },
   { method: "GET", path: "/api/boards/:id", handler: getBoardHandler },
   {
     method: "GET",
@@ -178,4 +223,5 @@ export const boardRoutes: Route[] = [
     path: "/api/boards/:id/restore",
     handler: restoreHandler,
   },
+  { method: "GET", path: "/api/boards/:id/export", handler: exportHandler },
 ];

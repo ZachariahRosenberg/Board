@@ -9,6 +9,7 @@ import {
   BoardAssetQuotaExceeded,
 } from "./assets.ts";
 import { requireAuth } from "./auth.ts";
+import { ImportRejected } from "./bundle.ts";
 import { CommentNotFound, InvalidAnchor } from "./comments.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
@@ -308,6 +309,12 @@ function errorResponse(
   }
   if (err instanceof SubscriptionNotFound) {
     return jsonError(404, "subscription_not_found", err.message, headers);
+  }
+  if (err instanceof ImportRejected) {
+    // 422 over 400: the request was well-formed HTTP; the bundle's CONTENT
+    // failed validation (quarantine, manifest schema, zip-slip) — the
+    // message names the failing item and nothing was written
+    return jsonError(422, "import_rejected", err.message, headers);
   }
   console.error("boardd: unhandled error", err);
   return jsonError(500, "internal_error", "internal error", headers);

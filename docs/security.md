@@ -26,7 +26,7 @@ frame-ancestors 'none'; object-src 'none'; base-uri 'none'
 - `script-src 'self' 'unsafe-inline'` — the accepted cost of D18: board scripts run, from the app's own origin (`/libs/*`, pinned) or inline.
 - `default-src 'self'` — no audio, video, plugin, or worker reach beyond the app.
 
-**Named, owner-accepted residual risks:** board script shares the page with the session token (localStorage) and the API — it can act as the human (write/resolve anything) and paint arbitrary UI over the app (phishing). Rationale: boards are published by the user's own agents, which already hold machine-level access. **Foreign content invalidates this rationale** — M6 import and any remote mode must re-examine quarantine before those paths ship.
+**Named, owner-accepted residual risks:** board script shares the page with the session token (localStorage) and the API — it can act as the human (write/resolve anything) and paint arbitrary UI over the app (phishing). Rationale: boards are published by the user's own agents, which already hold machine-level access. **Foreign content invalidates this rationale** — bundle import re-runs the full quarantine ([security.md](security.md) "Import quarantine"); any remote mode remains unshipped.
 
 Markdown boards are unaffected: they pass through DOMPurify at publish and are script-free by construction (invariant 5).
 
@@ -63,6 +63,22 @@ Markdown boards are unaffected: they pass through DOMPurify at publish and are s
 
 **Residual:** opening a sanitized SVG by direct navigation (not via `<img>`) renders it as a document — scripts and href-based external references are stripped at ingest, but a CSS `url()` fetch in such a page is accepted residual risk (requires knowing the unguessable id). Content-bearing `<script>`/`<style>` elements inside an svg are destroyed by a happy-dom parser truncation before DOMPurify sees them — fail-closed: the payload is gone, at the cost of the drawing.
 
+## Import quarantine (bundle import, M6)
+
+`POST /api/boards/import` is the first path where content the daemon did not publish becomes board content: an export bundle is a zip that may have been created by anyone, anywhere, and the D18 rationale (boards come from the user's own agents) does not cover it. Everything in a bundle is untrusted input, and import re-runs the full quarantine:
+
+- **Zip handling is memory-only (zip-slip defense).** The bundle is never extracted to disk; entries are parsed in memory and every entry name must match the expected layout exactly (`manifest.json`, `comments.json`, `events.jsonl`, `content/<n>.<md|html>`, `assets/<id>.<ext>`) — absolute paths, `..`, backslashes, NULs, and any unexpected file are a 422. Asset file names on disk are minted fresh by the daemon; no bundle byte is ever used as a filesystem path.
+- **Strict manifest schema**: an unknown schema version is a 422; every field is type-checked; the comment count in the manifest must match `comments.json`.
+- **Markdown re-renders through the full publish pipeline** (marked → DOMPurify → anchors) — bundle markdown is treated exactly like a fresh publish (invariant 5), so a hand-crafted bundle with injected script is sanitized the same way a live publish would be.
+- **html re-derives through the publish pipeline** (fresh `data-ba` injection; the bundle's existing ids are kept so comment anchors hold) — a derived document inside the bundle is never trusted as-is. Imported html runs in the host chrome per D18: importing a bundle is a principal's explicit act, equivalent to publishing the html themselves, with the host CSP as the guard.
+- **Assets re-verify through the shared ingest pipeline** (`verifyAssetBytes` — the same function binary/`{path}` ingest uses: mime allowlist → magic bytes → size caps → SVG parse-and-sanitize) and get NEW ids. SVG bytes that change under re-sanitization are rejected outright: our own exports only ever carry already-sanitized SVG, so bytes that need sanitizing mean the bundle was modified after export.
+- **Bundle self-containment is enforced**: every `asset:` embed, `src="/assets/<id>"` reference, and image-anchored comment must resolve to an asset the bundle itself carries — a dangling id is a 422 and can never silently resolve to a different board's asset.
+- **Atomicity**: validate everything (zip layout, manifest, per-version re-render, asset re-verification, reference resolution) before a single byte is written; any rejection is a 422 naming the failing item and leaves the data dir untouched. The write phase reuses the audited service functions (create / ingest / publish) exactly as a live publish would.
+- **Comments replay as data** (original authors, anchors, threading, resolve state, timestamps; fresh ids) onto the new board's own fresh event log; the bundle's `events.jsonl` is an audit snapshot and is **never replayed** — the global seq stays append-only monotonic (invariant 4).
+- **Request cap**: 64 MB per import — a bundle legitimately spans multiple ≤8 MB versions plus the ≤8 MB asset quota, and the cap bounds hostile-input render cost.
+
+Import always mints a NEW board id (restore = import to a new id; collision handling is a state machine we don't need) and restores the board under its EXPORTED status — the save/load-old-boards story wants fidelity.
+
 ## Webhooks (subscriptions + dispatcher)
 
 Webhook URLs are **owner/agent-chosen and can point anywhere, including localhost services — that is the feature**, not an SSRF bug: this is a loopback-only, single-local-human daemon, and the same principals who register a URL already hold machine-level access (their own agent tokens, or the human's machine). The daemon's API hardening is not bypassed by webhooks — the *outbound* POST is a feature the subscriber explicitly asked for. What is still enforced at subscribe time:
@@ -79,4 +95,4 @@ Webhook URLs are **owner/agent-chosen and can point anywhere, including localhos
 
 - Board script can read the session token, act as the human on the API, and repaint the app (D18, owner-accepted; rationale in the render trust model above). `connect-src 'self'` still blocks network exfiltration and localhost port probing.
 - CPU DoS from a hostile board: no in-page throttling; mitigations are the 8 MB cap and closing the tab.
-- Foreign content (M6 import, remote modes) is NOT covered by the D18 rationale — quarantine must be re-examined before those paths ship.
+- Imported html boards run in the host chrome per D18 — the import quarantine re-runs the publish pipelines (above) but does not sandbox html; remote modes (ngrok etc.) remain unshipped and must be re-examined before they are.
