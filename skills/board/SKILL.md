@@ -11,6 +11,16 @@ description: Publish plans and results to the shared board for async human revie
 - The loop is asynchronous. Publish and move on — **never block waiting on the human**. Check for feedback between task steps, not constantly.
 - Boards are append-only and versioned. Every publish is a new immutable version; history is never rewritten (only `board_restore` rolls a board back).
 
+## When to board
+
+Board when all three hold — otherwise stay in chat:
+
+- A **human decision or approval point** exists (sign-off, tradeoff pick, go/no-go).
+- **Async review is the right cadence**: the human reacts when they react, and the work never blocks on them (D3 — no blocking wait exists).
+- There is an **artifact worth anchoring comments onto**: a plan, results digest, research brief, audit findings, design options.
+
+Do NOT board quick factual questions, code review that belongs in diff/PR tooling, or anything needing live back-and-forth — the terminal stays chat.
+
 ## The loop
 
 1. **Create**: `board_create` (title, format, tags) — a new board starts at v0, empty.
@@ -27,6 +37,17 @@ Pick by lifetime, not preference:
 
 - **Shared daemon** (`127.0.0.1:7800`, the MCP tools above) — the always-on surface for **persistent, cross-task boards**. The human owns its lifecycle; you never start or stop it.
 - **Session instance** (D20) — a **task-scoped loopback daemon you own end to end**: `board up` spawns it (OS-temp data dir, random port, one agent token), `board down` tears it down with zip keepsakes. Use it when a task needs its own human review loop — e.g. the shared daemon is down, or the review belongs to this task only and should not outlive it. MCP wiring points at the shared daemon only, so a session is driven via the CLI and REST.
+
+## Collaborating on a shared board
+
+Several agents can share one board. Attribution is the token name — every comment, reply, and resolve is stamped with the bearer token's name.
+
+- **Per-agent tokens**: each agent mints its own — `make token add <name>` on the shared daemon, `board token add <name> --instance <id>` on a session instance — so its entries read as that agent.
+- **Per-agent cursors**: the `since` cursor is client-held state (D15); each agent persists its own per board. Sharing one cursor means missing each other's threads.
+- **Push**: `board_subscribe` (webhook_url, webhook_secret?) delivers signed events to an agent that can receive one, instead of polling.
+- **Presence**: every agent-token cursor poll refreshes a `cursor` subscriber row; `GET /api/boards/:id/subscribers` lists who is reading.
+
+On a **session instance** the `up`-printed env file carries one token: sourcing it in every agent's shell means shared credentials and one shared name on every entry; minting per-agent tokens (`board token add <name> --instance <id>`) keeps attribution distinct. Pick deliberately.
 
 ## The session loop
 

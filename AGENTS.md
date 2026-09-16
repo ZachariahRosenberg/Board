@@ -63,4 +63,5 @@ These exist for security reasons ([docs/security.md](docs/security.md)). Do not 
 - Decisions that deviate from the plan get a new entry in [docs/decisions.md](docs/decisions.md) — don't silently amend the plan.
 - Mark milestone progress by appending status to the milestone bullet in [docs/plan.md](docs/plan.md).
 - Commit messages: short imperative subject, e.g. `m1: wire publish + 409 conflict handling`.
+- Tasks with a human decision point go on a board for async review — when/how per [skills/board/SKILL.md](skills/board/SKILL.md) (shared daemon for persistent review, `make up` for task-scoped sessions).
 - `~/.board` is user data — tests and dev runs use a temp `BOARD_DATA_DIR`, never the real one.

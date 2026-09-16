@@ -34,6 +34,10 @@ A test that passes whether or not the behavior exists is worse than a missing te
 
 **Removal discipline** — audits that only add are a ratchet that grows suites nobody maintains. Did this change make a test obsolete or redundant (subsumed with no distinct bad/weird/boundary input)? Did it add the Nth near-identical body that wants parametrization, or a skip whose condition can never be true? Every removal proposal MUST name the test that retains the behavior — a proposal without one is coverage loss, not a finding.
 
+## Boards
+
+- Findings that warrant a human decision — blockers, owner-accepted-risk candidates — also surface on a board via the Manager, per the board skill (`skills/board/SKILL.md`), in addition to your report back to the orchestrator.
+
 ## Output format
 
 Mode A:
