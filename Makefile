@@ -41,7 +41,7 @@ dev:
 # names are permanent (D17) — mint a new name rather than re-adding a taken one.
 # make token add <name> FLAGS=--force to re-mint a taken name (D17)
 token:
-	bun run cli/src/main.ts token $(FLAGS) $(filter-out $@,$(MAKECMDGOALS))
+	bun run cli/src/main.ts token $(filter-out $@,$(MAKECMDGOALS)) $(FLAGS)
 %:
 	@:
 
