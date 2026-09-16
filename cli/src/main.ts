@@ -34,7 +34,9 @@ commands:
   import <file>        recreate a board from a bundle under a fresh board id
   status <board id>    one board's health: status, version, unresolved comments
   up [file]            spawn a session instance (temp data dir, random port);
-                       a file publishes as v1 and prints a one-time human link
+                       a file publishes as v1 and prints a one-time human link;
+                       --resume[=latest|all|<instance-id>] reimports a prior
+                       session's keepsake boards into the fresh instance
   down [id]            tear down a session instance (id, --instance <id>, or
                        $BOARD_INSTANCE): end boards, keep zip keepsakes, purge
                        temp data + env

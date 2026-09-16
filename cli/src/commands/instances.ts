@@ -12,9 +12,11 @@ import { createExchangeToken } from "../../../server/src/sessions.ts";
 import {
   BOOT_GRACE_MS,
   countBoardsOnDisk,
+  discoverKeepsakes,
   humanLink,
   instancePaths,
   instancesRoot,
+  type KeepsakeSource,
   listRegistryEntries,
   PidForeignError,
   pidIdentity,
@@ -26,11 +28,12 @@ import {
   teardownInstance,
 } from "../instances.ts";
 import { renderTable } from "../table.ts";
+import { importBundle } from "./boards.ts";
 import { defaultOpener, type OpenUrl } from "./open.ts";
 import { scan } from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
-export const INSTANCES_USAGE = `usage: board up [file] [--title T] [--format markdown|html] [--tags a,b] [--agent NAME] [--open]
+export const INSTANCES_USAGE = `usage: board up [file] [--title T] [--format markdown|html] [--tags a,b] [--agent NAME] [--resume[=latest|all|<instance-id>]] [--open]
        board down [<id>] [--instance <id>] [--keep-data] [--no-export]
        board instances [--all] [--prune]`;
 
@@ -91,12 +94,21 @@ interface UpArgs {
   tags: string[];
   agent: string;
   open: boolean;
+  // M8.1a: undefined = no resume; otherwise "latest" | "all" | an instance id
+  resume?: string;
 }
 
 function parseUpArgs(argv: string[]): UpArgs | string {
+  // `--resume` is the one value-or-bare flag (M8.1a): bare means latest.
+  // scan's value flags always consume the next argv element, so the bare
+  // form is normalized to `--resume=latest` first — the scan then only ever
+  // sees `=`-carrying values and cannot eat the file positional.
+  const normalized = argv.map((arg) =>
+    arg === "--resume" ? "--resume=latest" : arg,
+  );
   const scanned = scan(
-    argv,
-    ["--title", "--format", "--tags", "--agent"],
+    normalized,
+    ["--title", "--format", "--tags", "--agent", "--resume"],
     ["--open"],
   );
   if (typeof scanned === "string") {
@@ -104,6 +116,18 @@ function parseUpArgs(argv: string[]): UpArgs | string {
   }
   if (scanned.positional.length > 1) {
     return "up takes at most one file";
+  }
+  const resume = scanned.values.get("resume");
+  // Shape discipline (the audit F1 guard-2 rule): an instance-id value
+  // becomes a registry path in discovery — only ids `up` could have minted
+  // may address the registry.
+  if (
+    resume !== undefined &&
+    resume !== "latest" &&
+    resume !== "all" &&
+    !plausibleId(resume)
+  ) {
+    return `--resume takes latest, all, or an instance id (s-<10 alphanumerics>), got "${resume}"`;
   }
   return {
     file: scanned.positional[0],
@@ -114,6 +138,7 @@ function parseUpArgs(argv: string[]): UpArgs | string {
       : [],
     agent: scanned.values.get("agent") ?? "session",
     open: scanned.bools.has("open"),
+    resume,
   };
 }
 
@@ -122,6 +147,88 @@ interface PublishInput {
   title: string;
   format: Format;
   tags: string[];
+}
+
+interface ResumeResult {
+  // stdout: one line per resumed board + its human-link hint, or the
+  // empty-case notice
+  lines: string[];
+  // stderr: one notice per failed keepsake zip
+  notices: string[];
+}
+
+// M8.1a `up --resume` (D20 continuity — owner green-light 2026-09-16):
+// reimport a prior session's keepsake zips into the fresh instance. The
+// import mechanics are REUSED from `board import` (importBundle): one POST
+// per zip against the NEW instance's daemon, authenticated with the freshly
+// minted agent token — import semantics unchanged, so the M6 quarantine
+// re-runs and every board lands under a NEW id (import's always-new-id
+// rule): a resume is a fresh COPY, never an id-stable move, which is why
+// `--resume=<id>` works repeatedly. Never throws: a failing zip (e.g. a 422
+// quarantine rejection on a corrupt keepsake) is a per-board notice and the
+// rest continue — a bad keepsake must not break the new session it is
+// resurrected into.
+async function resumeKeepsakes(
+  registryDataDir: string,
+  newInstance: ReadyInstanceEntry,
+  token: string,
+  mode: string,
+): Promise<ResumeResult> {
+  const lines: string[] = [];
+  const notices: string[] = [];
+  let sources: KeepsakeSource[];
+  try {
+    const discovered = discoverKeepsakes(registryDataDir, newInstance.id);
+    // Discovery sorts most-recent-first: latest takes the single newest
+    // zip-bearing instance, all takes every prior instance, an id only that
+    // one (unknown id ⇒ empty ⇒ the gentle notice below).
+    sources =
+      mode === "latest"
+        ? discovered.slice(0, 1)
+        : mode === "all"
+          ? discovered
+          : discovered.filter((source) => source.id === mode);
+  } catch (err) {
+    notices.push(`resume discovery failed: ${errText(err)}`);
+    return { lines, notices };
+  }
+  if (sources.length === 0) {
+    // The empty case is a normal outcome, not an error: the session goes on.
+    lines.push(
+      mode === "latest" || mode === "all"
+        ? "no previous session boards to resume"
+        : `no previous session boards to resume from ${mode}`,
+    );
+    return { lines, notices };
+  }
+  for (const source of sources) {
+    const imported: Array<{ id: string; title: string }> = [];
+    for (const zip of source.zips) {
+      try {
+        const bytes = new Uint8Array(await Bun.file(zip).arrayBuffer());
+        imported.push(
+          await importBundle(
+            undefined,
+            { baseUrl: newInstance.url, token },
+            bytes,
+          ),
+        );
+      } catch (err) {
+        notices.push(
+          `resuming keepsake ${basename(zip)} from ${source.id} failed: ${errText(err)}`,
+        );
+      }
+    }
+    for (const board of imported) {
+      lines.push(
+        `resumed ${imported.length} board(s) from ${source.id}: ${board.id} — "${board.title}"`,
+      );
+      // Resumed boards get no human link of their own — this is how the
+      // agent mints one.
+      lines.push(`hint: board open --instance ${newInstance.id} ${board.id}`);
+    }
+  }
+  return { lines, notices };
 }
 
 async function runUp(input: InstancesCommandInput): Promise<number> {
@@ -244,6 +351,14 @@ async function runUp(input: InstancesCommandInput): Promise<number> {
       }
     }
 
+    // M8.1a ordering: the file board published above is the PRIMARY — it
+    // landed first, and only now do the prior sessions' keepsakes import
+    // (D20 continuity). Both finish before the summary prints below.
+    const resume =
+      parsed.resume !== undefined
+        ? await resumeKeepsakes(config.dataDir, entry, token, parsed.resume)
+        : null;
+
     io.stdout(`instance ${entry.id} listening on ${entry.url}`);
     // The one sanctioned printed plaintext (invariant 7's exception, D20) —
     // everything else holds the token only hashed (db) or not at all.
@@ -257,6 +372,14 @@ async function runUp(input: InstancesCommandInput): Promise<number> {
         io.stderr(
           "board: warning: web/dist is missing — the human link will 404 the UI (build it: make web)",
         );
+      }
+    }
+    if (resume !== null) {
+      for (const line of resume.lines) {
+        io.stdout(line);
+      }
+      for (const notice of resume.notices) {
+        io.stderr(`board: ${notice}`);
       }
     }
     io.stdout(`tear down with: board down ${entry.id}`);

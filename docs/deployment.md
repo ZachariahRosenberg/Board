@@ -71,7 +71,7 @@ D20 gives agents a task-scoped loop they own end to end: `board up` spawns a **t
 
 | Command | What it does |
 |---|---|
-| `board up [file] [--title T] [--format markdown\|html] [--tags a,b] [--agent NAME] [--open]` | spawn a session instance; a file is published as v1 and a one-time human link printed (`--open` also xdg-opens it) |
+| `board up [file] [--title T] [--format markdown\|html] [--tags a,b] [--agent NAME] [--resume[=latest\|all\|<instance-id>]] [--open]` | spawn a session instance; a file is published as v1 and a one-time human link printed (`--open` also xdg-opens it); `--resume` reimports a prior session's keepsake boards ([below](#resuming-a-prior-session-up---resume)) |
 | `board down [<id>] [--instance <id>] [--keep-data] [--no-export]` | tear down: end open boards, keep zip keepsakes, stop the daemon, purge temp data + env file |
 | `board instances [--all] [--prune]` | registry view — live by default, `--all` adds closed, `--prune` cleans stale entries |
 
@@ -140,7 +140,19 @@ The env file is the session-credential *delivery* artifact (D20) — mode 0600, 
 
 ### Keepsakes
 
-After `down`, the registry dir keeps `instance.json` (the audit record), `daemon.log`, and `boards/*.zip` — `make import`-compatible bundles. In-flight webhook deliveries may be dropped at teardown; cursor polling (D15) is the reliable consumption path for sessions.
+After `down`, the registry dir keeps `instance.json` (the audit record), `daemon.log`, and `boards/*.zip` — `make import`-compatible bundles, and the substrate `board up --resume` rehydrates ([below](#resuming-a-prior-session-up---resume)). In-flight webhook deliveries may be dropped at teardown; cursor polling (D15) is the reliable consumption path for sessions.
+
+### Resuming a prior session (`up --resume`)
+
+The keepsake zips are the session-continuity story (D20; owner green-light 2026-09-16 on the dogfood board): `board up --resume` reimports a prior session's boards into the fresh instance — "continue where I left off" without hand-running `make import` per zip.
+
+- **Flag forms:** `--resume` (bare) ≡ `--resume=latest` — the most recent closed instance that has ≥1 keepsake zip. `--resume=all` — every prior instance's zips. `--resume=<instance-id>` — only that instance's zips. Via make: `make up FLAGS="--resume=latest"` — there is no dedicated make variable; `FLAGS` rides the existing `up` target exactly as `down`'s flags do. (Use the `=` form; bare `--resume` means latest anywhere among the flags.)
+- **Discovery:** the registry is scanned for `instances/<id>/boards/*.zip` — **the zips on disk are the truth**; a drifted `boards` stamp in `instance.json` is ignored. "Most recent" = the greatest `closedAt` in `instance.json`, falling back to the registry dir's mtime when the stamp is absent. The instance being created is skipped, and live instances have no zips by construction (keepsakes are written at teardown).
+- **Mechanics:** one `POST /api/boards/import` per zip against the NEW instance's daemon, authenticated with the freshly minted agent token — the same request `board import` builds, with import semantics unchanged (the M6 import quarantine re-runs).
+- **New-id rule:** import always mints a NEW board id ([security.md](security.md) "Import quarantine"), so a resume is a fresh **copy**, never a moved board. Resumed ids never match the originals — do not expect id stability across resumes — and because the zips persist after `down`, `--resume=<id>` works repeatedly: each resume produces fresh copies with fresh ids.
+- **Ordering:** with a file argument, the file board is published FIRST (it is the primary), then the resume imports; both finish before `up` prints its summary.
+- **Output:** one line per resumed board — `resumed N board(s) from <instance-id>: <new-id> — "<title>"` (N counts the boards resumed from that instance) — plus a hint line per board, `hint: board open --instance <up-instance-id> <board-id>`, which is how the agent mints the human link for a resumed board.
+- **Failure tolerance:** a zip that fails import (e.g. a 422 quarantine rejection on a corrupt keepsake) prints a notice per failure and the remaining zips still import; `up` still exits 0 — a bad keepsake must not break the new session it is resurrected into. With nothing discoverable, `up` prints `no previous session boards to resume` and continues normally (a `--resume=<unknown-id>` behaves the same, naming the id); only a malformed id value (`--resume=…` that is neither `latest`, `all`, nor `s-<10 alphanumerics>`) is a usage error before anything spawns.
 
 **Boundaries (D20).** Loopback bind + Host allowlist are pinned at spawn and cannot be widened by inherited env (the child env is scrubbed of every `BOARD_*` key); instance data is always OS-temp, and teardown purges only dirs of that shape — signals go only to pid-verified processes, re-checked at signal time; the 0600 env file is the one sanctioned ephemeral credential-delivery artifact. The shared daemon and persistent `~/.board` remain human-managed.
 

@@ -146,6 +146,29 @@ async function runExportCommand(
   return 0;
 }
 
+// The import REQUEST — the raw zip bytes POSTed to /api/boards/import — is
+// shared by `board import` and `up --resume` (M8.1a, D20 continuity): one
+// POST per zip, byte-identical semantics. Import itself is unchanged (the M6
+// quarantine re-runs server-side; boards always land under NEW ids —
+// import's always-new-id rule). Throws with the daemon's error message on
+// non-2xx so callers shape their own UX.
+export async function importBundle(
+  fetchImpl: FetchLike | undefined,
+  target: RestTarget,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<{ id: string; title: string }> {
+  const url = new URL("/api/boards/import", target.baseUrl);
+  const res = await (fetchImpl ?? fetch)(url, {
+    method: "POST",
+    headers: { ...bearer(target.token), "content-type": "application/zip" },
+    body: bytes,
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res));
+  }
+  return (await res.json()) as { id: string; title: string };
+}
+
 async function runImportCommand(
   input: BoardsCommandInput,
   target: RestTarget,
@@ -161,19 +184,14 @@ async function runImportCommand(
     );
     return 1;
   }
-  const url = new URL("/api/boards/import", target.baseUrl);
-  const res = await (fetchImpl ?? fetch)(url, {
-    method: "POST",
-    headers: { ...bearer(target.token), "content-type": "application/zip" },
-    body: bytes,
-  });
-  if (!res.ok) {
-    io.stderr(`board: ${await errorMessage(res)}`);
+  try {
+    const board = await importBundle(fetchImpl, target, bytes);
+    io.stdout(`imported "${board.title}" as board ${board.id}`);
+    return 0;
+  } catch (err) {
+    io.stderr(`board: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
-  const board = (await res.json()) as { id: string; title: string };
-  io.stdout(`imported "${board.title}" as board ${board.id}`);
-  return 0;
 }
 
 function argError(io: CommandIo, message: string): number {

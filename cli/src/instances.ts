@@ -733,6 +733,53 @@ export function exportBoardsFromDisk(
   return kept;
 }
 
+// Resume discovery (M8.1a — D20 continuity, owner green-light 2026-09-16):
+// `board up --resume` reimports a prior session's keepsake zips into a fresh
+// instance instead of forcing the `make import` ceremony. The zips on disk
+// are the truth here — the `boards` list stamped in instance.json is ignored
+// because stamped metadata can drift from what teardown actually kept (the
+// keepsake story in docs/deployment.md "Session instances"). Recency ranks
+// --resume=latest: greatest `closedAt`, falling back to the registry dir's
+// mtime when the stamp is absent (a `down` that died between the zip writes
+// and the stamp leaves an unstamped entry). Live instances have no zips by
+// construction — keepsakes are written at teardown.
+export interface KeepsakeSource {
+  id: string;
+  recencyMs: number;
+  zips: string[];
+}
+
+export function discoverKeepsakes(
+  dataDir: string,
+  excludeId: string,
+): KeepsakeSource[] {
+  const sources: KeepsakeSource[] = [];
+  for (const { paths, entry } of listRegistryEntries(dataDir)) {
+    if (basename(paths.dir) === excludeId) {
+      continue; // the instance `up` is creating right now
+    }
+    try {
+      const zips = readdirSync(paths.boards)
+        .filter((name) => name.endsWith(".zip"))
+        .sort()
+        .map((name) => join(paths.boards, name));
+      if (zips.length === 0) {
+        continue;
+      }
+      const closedMs =
+        entry?.closedAt !== undefined ? Date.parse(entry.closedAt) : Number.NaN;
+      sources.push({
+        id: basename(paths.dir),
+        recencyMs: Number.isNaN(closedMs)
+          ? statSync(paths.dir).mtimeMs
+          : closedMs,
+        zips,
+      });
+    } catch {}
+  }
+  return sources.sort((a, b) => b.recencyMs - a.recencyMs);
+}
+
 // The daemon is NOT this process's child (`down` is a different process from
 // the `up` that spawned it) — waitpid/SIGCHLD cannot observe it, so /proc
 // identity polling is the only liveness mechanism. [D20]
