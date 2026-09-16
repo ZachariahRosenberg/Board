@@ -1,0 +1,55 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "manager",
+  "agent": {
+    "manager": {
+      "description": "Orchestrating primary agent — SMART plans, skeptical subagent delegation, measured and proven claims, durable lessons. Use as the default session agent.",
+      "mode": "primary",
+      "model": "fireworks-ai/accounts/fireworks/models/glm-5p3",
+      "prompt": "{file:./.opencode/prompts/manager.md}",
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "task": "allow"
+      }
+    },
+    "coder": {
+      "description": "Software engineering subagent — understands the codebase first, validates by experiment, TDD where practical, elegant code with WHY-comments. Dispatch for code changes.",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/glm-5p3-flash",
+      "prompt": "{file:./.opencode/prompts/coder.md}",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git commit*": "deny",
+          "git push*": "deny"
+        }
+      }
+    },
+    "researcher": {
+      "description": "Research and fact-check subagent — multi-source, cited, neutral journalism; reads code for context but never writes it. Dispatch for online research and claim verification.",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/glm-5p3-flash",
+      "prompt": "{file:./.opencode/prompts/researcher.md}",
+      "permission": {
+        "edit": "deny",
+        "bash": "allow"
+      }
+    },
+    "auditor": {
+      "description": "Adversarial audit subagent — code audit and test-coverage audit modes; finds problems, proves vacuous tests, proposes removals. Dispatch before merging anything significant.",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/glm-5p3-flash",
+      "prompt": "{file:./.opencode/prompts/auditor.md}",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "*": "allow",
+          "git commit*": "deny",
+          "git push*": "deny"
+        }
+      }
+    }
+  }
+}
