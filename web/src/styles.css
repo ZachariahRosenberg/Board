@@ -300,13 +300,17 @@ body {
 }
 
 /* markdown boards are published snapshots (docs/plan.md): GFM task-list
-   checkboxes render `<input type="checkbox" disabled>` and must read as
-   static — muted, inert cursor, and no hover affordance is ever added.
-   Interactive checklists are an html-board thing (D18 scripts run), so this
-   is scoped to the markdown format class, never .board-content.html. */
-.board-content.markdown input[type="checkbox"] {
+   checkboxes are replaced server-side with a static glyph span
+   (server/src/render.ts) — a disabled input still read as an interactive
+   control (dogfooded). The glyph is muted, non-selectable, inert; the title
+   hint lives on the element. Scoped to the markdown format class, never
+   .board-content.html — html checkboxes may be genuinely interactive (D18
+   scripts run). */
+.board-content.markdown .task-glyph {
+  font-family: var(--font-sans);
+  color: var(--fg-muted);
   cursor: default;
-  opacity: 0.6;
+  user-select: none;
 }
 
 .board-content .mermaid {
@@ -623,6 +627,19 @@ body {
   background: var(--bg-subtle);
 }
 
+/* thread thumbnails are buttons: click opens the board image lightbox, and
+   the comment's overlay renders scaled inside (positioned box hugging the
+   thumb, same pattern as .image-anchor-wrap on the board) */
+.comment-thumb {
+  position: relative;
+  display: block;
+  width: fit-content;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
 /* the overlay editor modal (hand-rolled, no dependency) */
 .overlay-editor-backdrop {
   position: fixed;
@@ -698,4 +715,56 @@ body {
   font-size: 0.9em;
   padding: 2px 6px;
   min-width: 120px;
+}
+
+/* the image lightbox (click-to-review on board images + thread thumbnails) —
+   shares the overlay editor's modal look (theme vars, same backdrop) */
+.lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgb(0 0 0 / 45%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  max-width: min(90vw, 900px);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lightbox-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.lightbox-title {
+  color: var(--fg-muted);
+  font-size: 0.8em;
+  font-family: var(--font-mono);
+  margin-right: auto;
+}
+
+.lightbox-stage {
+  position: relative;
+  overflow: auto;
+  /* hug the img (like the editor's stage) so the overlay layers measure
+     exactly the displayed image box */
+  width: fit-content;
+  max-width: 100%;
+}
+
+.lightbox-stage img {
+  max-width: 100%;
+  display: block;
 }

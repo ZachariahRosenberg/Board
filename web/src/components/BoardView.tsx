@@ -50,11 +50,15 @@ export function BoardView({ id }: { id: string }) {
   const [pendingAnchor, setPendingAnchor] = useState<Anchor | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   // image annotation: the sidebar streams comments up; image-anchored threads
-  // badge their board image and hover-preview the overlay on it
+  // badge their board image and hover-preview the overlay on it, and the
+  // lightbox (below) reviews any board image full size with its overlays
   const [comments, setComments] = useState<Comment[]>([]);
   const [imageTargets, setImageTargets] = useState<Record<string, HTMLElement>>(
     {},
   );
+  // the image lightbox: the asset whose review modal is open (one modal at a
+  // time — a single value, replaced on each open)
+  const [lightbox, setLightbox] = useState<{ assetId: string } | null>(null);
   const [activeImage, setActiveImage] = useState<{
     anchor: ImageAnchor;
     overlay: ImageOverlay;
@@ -195,6 +199,57 @@ export function BoardView({ id }: { id: string }) {
     }
     setImageTargets(targets);
   }, [version, data]);
+
+  // Lightbox entry (dogfooded ask [163]: "click the image and have it open in
+  // a modal, so that I can further review and annotate"): a delegated click on
+  // any board image whose src is a served asset — both formats, since the wrap
+  // effect above treats them alike. preventDefault so an asset img nested in a
+  // markdown link cannot half-navigate while the modal opens: for asset images
+  // the lightbox IS the click's action.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version/data are intentional re-run triggers — the listeners rebind when the content DOM is replaced
+  useEffect(() => {
+    const root = containerRef.current;
+    if (root === null || version === null) {
+      return;
+    }
+    const onClick = (event: Event): void => {
+      const target = event.target as Element | null;
+      if (target === null || typeof target.closest !== "function") {
+        return;
+      }
+      const img = target.closest("img");
+      if (img === null) {
+        return;
+      }
+      const assetId = assetIdFromSrc(img.getAttribute("src") ?? "");
+      if (assetId !== null) {
+        event.preventDefault();
+        setLightbox({ assetId });
+      }
+    };
+    root.addEventListener("click", onClick);
+    return () => {
+      root.removeEventListener("click", onClick);
+    };
+  }, [version, data]);
+
+  // Escape closes the lightbox (the keyboard close path, alongside the close
+  // button). No focus trap for v1: the modal is read-only review with two
+  // real buttons — a trap is overkill and this modal never stacks.
+  useEffect(() => {
+    if (lightbox === null) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setLightbox(null);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [lightbox]);
 
   // Live updates (SSE): any event for this board refreshes comments; board
   // lifecycle events also refresh the board meta. Reconnect is EventSource's.
@@ -375,6 +430,20 @@ export function BoardView({ id }: { id: string }) {
     return <div className="status">loading…</div>;
   }
   const board = data.board;
+  // every image-anchored root comment's overlay for the lightboxed asset —
+  // the review modal stacks them all (the board image shows one at a time on
+  // hover; review shows the full picture)
+  const lightboxOverlays =
+    lightbox === null
+      ? []
+      : comments.flatMap((comment) =>
+          comment.in_reply_to === null &&
+          comment.anchor.type === "image" &&
+          comment.anchor.asset_id === lightbox.assetId &&
+          comment.anchor.overlay !== undefined
+            ? [{ id: comment.id, overlay: comment.anchor.overlay }]
+            : [],
+        );
   return (
     <div className="board-view">
       <header className="board-header">
@@ -409,8 +478,8 @@ export function BoardView({ id }: { id: string }) {
           ) : (
             <div
               ref={containerRef}
-              // the format class scopes snapshot-only styling (e.g. muted
-              // markdown task-list checkboxes) away from html boards, whose
+              // the format class scopes snapshot-only styling (e.g. the static
+              // markdown task-list glyphs) away from html boards, whose
               // checkboxes may be genuinely interactive (D18 scripts run)
               className={`board-content ${board.format}`}
               // biome-ignore lint/security/noDangerouslySetInnerHtml: the sanctioned host-chrome display mode — markdown content is sanitized server-side at publish and script-free by construction (invariant 6, docs/security.md "Content rules"); html boards mount through mountBoardDocument instead (D18)
@@ -444,6 +513,11 @@ export function BoardView({ id }: { id: string }) {
               return;
             }
             setActiveImage({ anchor, overlay: anchor.overlay });
+          }}
+          onOpenImage={(assetId) => {
+            // a thread thumbnail click opens the same lightbox as the board
+            // image itself (the modal is the one review surface)
+            setLightbox({ assetId });
           }}
         />
       </div>
@@ -497,6 +571,73 @@ export function BoardView({ id }: { id: string }) {
         >
           {affordance.label}
         </button>
+      )}
+      {/* the image lightbox (dogfooded ask [163]): full-size review of one
+          asset with every image-anchored overlay for it stacked (each thread
+          contributes its own layer — the shared renderer, no fork). Backdrop
+          click closes (only the backdrop itself, not clicks inside the image
+          box); Escape and the close button are the keyboard paths; no focus
+          trap for v1 (read-only modal, never stacks — see the effect above). */}
+      {lightbox !== null && (
+        // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click is a pointer-only extra — Escape and the close button close for keyboard users
+        // biome-ignore lint/a11y/useKeyWithClickEvents: see above
+        <div
+          className="lightbox-backdrop"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setLightbox(null);
+            }
+          }}
+        >
+          <div className="lightbox" role="dialog" aria-label="image preview">
+            <div className="lightbox-toolbar">
+              <span className="lightbox-title">{lightbox.assetId}</span>
+              {board.status === "open" && (
+                <button
+                  type="button"
+                  className="pill"
+                  onClick={() => {
+                    // the floating "annotate image" button's exact flow: stage
+                    // the image anchor as a pending composer anchor and let
+                    // the sidebar own the editor — one editor implementation,
+                    // no fork (the composer holds the preview and its annotate
+                    // affordance)
+                    setPendingAnchor({
+                      type: "image",
+                      asset_id: lightbox.assetId,
+                    });
+                    setLightbox(null);
+                    selectionActiveRef.current = false;
+                    pinnedRef.current = false;
+                  }}
+                >
+                  annotate
+                </button>
+              )}
+              <button
+                type="button"
+                className="pill active"
+                onClick={() => {
+                  setLightbox(null);
+                }}
+              >
+                close
+              </button>
+            </div>
+            {/* hugs the img like the editor's stage, so the overlay layers
+                measure exactly the displayed image box */}
+            <div className="lightbox-stage">
+              <img
+                src={`/assets/${lightbox.assetId}`}
+                alt=""
+                draggable={false}
+              />
+              {lightboxOverlays.map(({ id, overlay }) => (
+                <ImageOverlayLayer key={id} overlay={overlay} />
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

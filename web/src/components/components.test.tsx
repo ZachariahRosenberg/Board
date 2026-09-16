@@ -11,7 +11,7 @@ import type {
 import {
   renderHtmlDocument,
   renderMarkdownDocument,
-  TASK_LIST_CHECKBOX_TITLE,
+  TASK_LIST_TITLE,
 } from "../../../server/src/render.ts";
 import type { CreateCommentInput } from "../api.ts";
 import { installDom, StubEventSource } from "../test-dom.ts";
@@ -394,7 +394,7 @@ describe("BoardView", () => {
   });
 
   test("board content carries the board format class", async () => {
-    // snapshot-only styling (muted markdown task-list checkboxes) must never
+    // snapshot-only styling (static markdown task-list glyphs) must never
     // reach html boards, whose checkboxes may be interactive (D18)
     const md = render(<BoardView id="b1" />);
     await act(async () => {});
@@ -669,6 +669,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={(anchor) => {
           highlightCalls.push(anchor);
         }}
@@ -709,6 +710,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -735,6 +737,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -770,6 +773,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -791,6 +795,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -821,6 +826,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -855,6 +861,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -881,6 +888,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={(n) => {
           switchCalls.push(n);
@@ -909,6 +917,7 @@ describe("CommentSidebar", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -990,6 +999,7 @@ describe("CommentSidebar image upload", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -1023,6 +1033,7 @@ describe("CommentSidebar image upload", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -1073,6 +1084,7 @@ describe("CommentSidebar image upload", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -1109,6 +1121,7 @@ describe("CommentSidebar image upload", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -1142,6 +1155,7 @@ describe("CommentSidebar image upload", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -1159,6 +1173,58 @@ describe("CommentSidebar image upload", () => {
     );
   });
 
+  test("thread thumbnails render the comment's own overlay and click through to the lightbox", async () => {
+    // dogfooded ask [163]: "I don't see the annotations in the thumbnail" —
+    // the shared overlay renderer scales the comment's overlay onto the thumb
+    const openCalls: string[] = [];
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onOpenImage={(assetId) => {
+          openCalls.push(assetId);
+        }}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const thumb = container.querySelector(
+      "button.comment-thumb",
+    ) as HTMLElement;
+    expect(thumb).not.toBe(null);
+    const layer = thumb.querySelector(".image-overlay-layer") as HTMLElement;
+    expect(layer).not.toBe(null);
+    // measure at the thumb's box (160px max width) → svg renders in that space
+    layer.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 160, height: 120 }) as DOMRect;
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+    });
+    const svg = thumb.querySelector("svg.image-overlay-svg");
+    expect(svg?.getAttribute("width")).toBe("160");
+    expect(svg?.getAttribute("height")).toBe("120");
+    // arrow (0.25, 0.5) → (0.75, 0.5) scaled onto the 160×120 thumb
+    const line = svg?.querySelector("line");
+    expect(line?.getAttribute("x1")).toBe("40");
+    expect(line?.getAttribute("y1")).toBe("60");
+    expect(line?.getAttribute("x2")).toBe("120");
+    expect(line?.getAttribute("y2")).toBe("60");
+    expect(svg?.querySelector("text")?.textContent).toBe("watch this");
+    // clicking reports the asset up to the board view (the lightbox lives
+    // there); the chip's hover-preview and highlight behaviors are untouched
+    await act(async () => {
+      thumb.click();
+    });
+    expect(openCalls).toEqual(["assetImg01"]);
+  });
+
   test("composer with a pending image anchor previews the held image", async () => {
     const container = render(
       <CommentSidebar
@@ -1170,6 +1236,7 @@ describe("CommentSidebar image upload", () => {
         onPendingAnchorConsumed={() => {}}
         onCommentsChange={() => {}}
         onImageHover={() => {}}
+        onOpenImage={() => {}}
         onHighlight={() => {}}
         onSwitchVersion={() => {}}
       />,
@@ -1246,7 +1313,9 @@ describe("BoardView image annotation", () => {
     expect(text?.getAttribute("x")).toBe("400");
     expect(text?.getAttribute("y")).toBe("40");
     expect(text?.textContent).toBe("watch this");
-    // leaving the chip unmounts the overlay
+    // leaving the chip unmounts the overlay ON THE BOARD IMAGE (the
+    // thumbnail's own scaled overlay from the thread is independent of chip
+    // hover and stays)
     await act(async () => {
       chip.dispatchEvent(
         new window.MouseEvent("mouseout", {
@@ -1255,7 +1324,12 @@ describe("BoardView image annotation", () => {
         }),
       );
     });
-    expect(container.querySelector(".image-overlay-layer")).toBe(null);
+    expect(
+      container.querySelector(".image-anchor-wrap .image-overlay-layer"),
+    ).toBe(null);
+    expect(
+      container.querySelector(".comment-thumb .image-overlay-layer"),
+    ).not.toBe(null);
   });
 
   test("an image thread chip click highlights the board image (anchor-target parity)", async () => {
@@ -1270,38 +1344,157 @@ describe("BoardView image annotation", () => {
     const img = container.querySelector(".image-anchor-wrap img");
     expect(img?.classList.contains("anchor-target")).toBe(true);
   });
+
+  test("clicking a board image opens the lightbox with the asset's overlays", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const img = container.querySelector(
+      ".image-anchor-wrap img",
+    ) as HTMLElement;
+    await act(async () => {
+      img.click();
+    });
+    const backdrop = container.querySelector(".lightbox-backdrop");
+    expect(backdrop).not.toBe(null);
+    const stage = container.querySelector(".lightbox-stage") as HTMLElement;
+    const lightImg = stage.querySelector("img") as HTMLImageElement;
+    expect(lightImg.getAttribute("src")).toBe("/assets/assetImg01");
+    // every image-anchored thread's overlay for this asset renders in the
+    // modal — measured against the stage box, the shared renderer
+    const layer = stage.querySelector(".image-overlay-layer") as HTMLElement;
+    expect(layer).not.toBe(null);
+    layer.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 800, height: 400 }) as DOMRect;
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+    });
+    const svg = stage.querySelector("svg.image-overlay-svg");
+    expect(svg?.getAttribute("width")).toBe("800");
+    expect(svg?.getAttribute("height")).toBe("400");
+    // arrow (0.25, 0.5) → (0.75, 0.5) scaled to the 800×400 box
+    const line = svg?.querySelector("line");
+    expect(line?.getAttribute("x2")).toBe("600");
+    const text = svg?.querySelector("text");
+    expect(text?.textContent).toBe("watch this");
+    expect(stage.querySelectorAll(".image-overlay-layer")).toHaveLength(1);
+  });
+
+  test("lightbox annotate routes through the existing composer → editor flow", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const img = container.querySelector(
+      ".image-anchor-wrap img",
+    ) as HTMLElement;
+    await act(async () => {
+      img.click();
+    });
+    const annotate = [
+      ...container.querySelectorAll(".lightbox-toolbar button"),
+    ].find((button) => button.textContent === "annotate") as HTMLElement;
+    await act(async () => {
+      annotate.click();
+    });
+    // the modal closed; the composer holds the image anchor — the floating
+    // "annotate image" button's exact flow (pendingAnchor → composer)
+    expect(container.querySelector(".lightbox-backdrop")).toBe(null);
+    expect(container.innerHTML).toContain("on image assetImg01");
+    // and the composer's annotate affordance mounts the existing editor
+    const composerAnnotate = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "annotate",
+    ) as HTMLElement;
+    await act(async () => {
+      composerAnnotate.click();
+    });
+    expect(container.querySelector(".overlay-editor")).not.toBe(null);
+    expect(
+      container.querySelector(".overlay-editor-stage img")?.getAttribute("src"),
+    ).toBe("/assets/assetImg01");
+  });
+
+  test("Escape and a backdrop click close the lightbox; a click on the image box does not", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const img = container.querySelector(
+      ".image-anchor-wrap img",
+    ) as HTMLElement;
+    const open = async (): Promise<void> => {
+      await act(async () => {
+        img.click();
+      });
+    };
+    await open();
+    expect(container.querySelector(".lightbox-backdrop")).not.toBe(null);
+    await act(async () => {
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(container.querySelector(".lightbox-backdrop")).toBe(null);
+    await open();
+    const backdrop = container.querySelector(
+      ".lightbox-backdrop",
+    ) as HTMLElement;
+    await act(async () => {
+      backdrop.click();
+    });
+    expect(container.querySelector(".lightbox-backdrop")).toBe(null);
+    await open();
+    // a click inside the image box is not a backdrop click (event.target vs
+    // currentTarget) — reviewing stays put
+    const stage = container.querySelector(".lightbox-stage") as HTMLElement;
+    await act(async () => {
+      stage.click();
+    });
+    expect(container.querySelector(".lightbox-backdrop")).not.toBe(null);
+  });
+
+  test("clicking a thread thumbnail opens the lightbox for that asset", async () => {
+    const container = render(<BoardView id="b1" />);
+    await act(async () => {});
+    const thumb = container.querySelector(
+      "button.comment-thumb",
+    ) as HTMLElement;
+    expect(thumb).not.toBe(null);
+    await act(async () => {
+      thumb.click();
+    });
+    expect(container.querySelector(".lightbox-backdrop")).not.toBe(null);
+    const lightImg = container.querySelector(
+      ".lightbox-stage img",
+    ) as HTMLImageElement;
+    expect(lightImg.getAttribute("src")).toBe("/assets/assetImg01");
+  });
 });
 
-describe("markdown task-list checkboxes (static snapshot affordance)", () => {
-  // the render pipeline is the implementation of the checkbox affordance
-  // (marked GFM → DOMPurify → title injection in server/src/render.ts); the
+describe("markdown task-list glyphs (static snapshot affordance)", () => {
+  // the render pipeline is the implementation of the task-list affordance
+  // (marked GFM → DOMPurify → glyph replacement in server/src/render.ts); the
   // muted/inert LOOK is CSS (styles.css, scoped to .board-content.markdown).
   // These assert the DOM attributes/structure the CSS keys off.
-  test("GFM task lists render disabled checkboxes carrying the snapshot title", async () => {
+  test("GFM task lists render glyph spans, not checkbox inputs", async () => {
     const { html } = await renderMarkdownDocument(
       "- [ ] unchecked thing\n- [x] checked thing\n",
     );
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const boxes = [
-      ...doc.querySelectorAll('input[type="checkbox"]'),
-    ] as HTMLInputElement[];
-    expect(boxes).toHaveLength(2);
-    // static by design: marked renders disabled and DOMPurify keeps it —
-    // the box can never actually toggle
-    for (const box of boxes) {
-      expect(box.hasAttribute("disabled")).toBe(true);
-      expect(box.getAttribute("title")).toBe(TASK_LIST_CHECKBOX_TITLE);
+    // no control semantics left — the dogfooded complaint was that a disabled
+    // input still LOOKS interactive
+    expect(doc.querySelectorAll("input")).toHaveLength(0);
+    const glyphs = [...doc.querySelectorAll("span.task-glyph")];
+    expect(glyphs).toHaveLength(2);
+    for (const glyph of glyphs) {
+      expect(glyph.getAttribute("title")).toBe(TASK_LIST_TITLE);
+      expect(glyph.getAttribute("aria-hidden")).toBe("true");
     }
-    // `- [x]` state survives the pipeline
-    expect(boxes[0].hasAttribute("checked")).toBe(false);
-    expect(boxes[1].hasAttribute("checked")).toBe(true);
+    // `- [x]` state survives the pipeline, as a clearly distinct glyph
+    expect(glyphs[0].textContent).toBe("☐");
+    expect(glyphs[1].textContent).toBe("☑");
   });
 
   test("html boards get no snapshot title — their checkboxes may be interactive (D18)", () => {
     const { html } = renderHtmlDocument(
       '<body><form><input type="checkbox"></form></body>',
     );
-    expect(html).not.toContain(TASK_LIST_CHECKBOX_TITLE);
+    expect(html).not.toContain(TASK_LIST_TITLE);
     expect(html).toContain('type="checkbox"');
   });
 });

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { Element } from "happy-dom";
 import { Window } from "happy-dom";
-import { renderHtmlDocument, renderMarkdownDocument } from "./render.ts";
+import {
+  InvalidAssetEmbed,
+  renderHtmlDocument,
+  renderMarkdownDocument,
+  TASK_LIST_TITLE,
+} from "./render.ts";
 
 // Code fences in plain double-quoted strings — no escaping needed there.
 const DOC = [
@@ -269,5 +274,84 @@ describe("renderHtmlDocument", () => {
       `<!doctype html><html><head></head><body><p data-ba="b1">plain</p></body></html>`,
     );
     expect(html.startsWith("<!doctype html><html>")).toBe(true);
+  });
+});
+
+// Task lists are a static-snapshot affordance: the GFM checkbox input is
+// replaced with a glyph span post-sanitize (a disabled input still read as an
+// interactive control, dogfooded). The look is CSS (styles.css, scoped to
+// .board-content.markdown); these assert the DOM shape the CSS keys off.
+describe("task list glyphs", () => {
+  test("checkbox inputs are replaced with glyph spans carrying the snapshot title", async () => {
+    const { html } = await renderMarkdownDocument(
+      "- [ ] unchecked thing\n- [x] checked thing\n",
+    );
+    const body = parseBody(html);
+    // no control semantics left anywhere in the document
+    expect(body.querySelectorAll("input")).toHaveLength(0);
+    const glyphs = [...body.querySelectorAll("span.task-glyph")];
+    expect(glyphs).toHaveLength(2);
+    // both states get the why-hint (the one thing CSS cannot carry)
+    for (const glyph of glyphs) {
+      expect(glyph.getAttribute("title")).toBe(TASK_LIST_TITLE);
+      // decorative marker: the list text carries the meaning
+      expect(glyph.getAttribute("aria-hidden")).toBe("true");
+    }
+    // checked state is clearly distinct: ☐ open, ☑ checked
+    expect(glyphs[0].textContent).toBe("☐");
+    expect(glyphs[1].textContent).toBe("☑");
+  });
+
+  test("html boards keep their checkbox inputs — glyphs are markdown-only (D18)", () => {
+    const { html } = renderHtmlDocument(
+      '<body><form><input type="checkbox"></form></body>',
+    );
+    expect(html).not.toContain(TASK_LIST_TITLE);
+    expect(html).toContain('type="checkbox"');
+    expect(html).not.toContain("task-glyph");
+  });
+});
+
+// Publish-time guard (dogfooded, live root-cause): an agent script wrote
+// "asset:undefined" into a board and the embed silently degraded. Now the
+// publish fails with InvalidAssetEmbed (→ 400 invalid_asset_embed at the
+// route); only shape-valid ids rewrite.
+describe("asset embed rewriting", () => {
+  test("shape-valid ids rewrite to the asset route before sanitize", async () => {
+    const { html } = await renderMarkdownDocument("![shot](asset:AbCdEf1234)");
+    expect(html).toContain('src="/assets/AbCdEf1234"');
+    expect(html).not.toContain("asset:");
+  });
+
+  test("shape-invalid asset: srcs fail the publish, naming the src", async () => {
+    for (const src of ["asset:undefined", "asset:abc"]) {
+      let err: unknown;
+      await renderMarkdownDocument(`![gone](${src})`).catch((caught) => {
+        err = caught;
+      });
+      expect(err).toBeInstanceOf(InvalidAssetEmbed);
+      expect((err as Error).message).toBe(`unknown asset embed "${src}"`);
+    }
+  });
+
+  test("a long src is echoed capped — the message stays under ~120 chars", async () => {
+    let err: unknown;
+    await renderMarkdownDocument(`![x](asset:${"x".repeat(500)})`).catch(
+      (caught) => {
+        err = caught;
+      },
+    );
+    expect(err).toBeInstanceOf(InvalidAssetEmbed);
+    const message = (err as Error).message;
+    expect(message.length).toBeLessThanOrEqual(120);
+    expect(message.startsWith('unknown asset embed "asset:xxx')).toBe(true);
+  });
+
+  test("non-asset images are not validated — relative and external srcs publish", async () => {
+    const { html } = await renderMarkdownDocument(
+      "![rel](foo.png)\n\n![ext](https://example.com/pic.png)",
+    );
+    expect(html).toContain('<img src="foo.png"');
+    expect(html).toContain('<img src="https://example.com/pic.png"');
   });
 });

@@ -15,6 +15,7 @@ import {
 } from "../api.ts";
 import { formatDate } from "../format.ts";
 import { ImageOverlayEditor } from "./ImageOverlayEditor.tsx";
+import { ImageOverlayLayer } from "./ImageOverlaySvg.tsx";
 
 interface ComposerState {
   anchor: Anchor;
@@ -35,6 +36,9 @@ interface CommentSidebarProps {
   onCommentsChange(comments: Comment[]): void;
   // hovering an image thread's chip previews its overlay on the board image
   onImageHover(anchor: ImageAnchor | null): void;
+  // clicking a thread's thumbnail asks the board view for its image lightbox
+  // (the modal lives there, above the board content)
+  onOpenImage(assetId: string): void;
 }
 
 function authorLabel(author: string): string {
@@ -300,6 +304,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
                 openComposer({ anchor: comment.anchor, replyTo: comment });
               }}
               onImageHover={props.onImageHover}
+              onOpenImage={props.onOpenImage}
             />
           ))}
         </div>
@@ -430,6 +435,7 @@ interface ThreadViewProps {
   onResolve(commentId: string): void;
   onReply(comment: Comment): void;
   onImageHover(anchor: ImageAnchor | null): void;
+  onOpenImage(assetId: string): void;
 }
 
 function ThreadView(props: ThreadViewProps) {
@@ -439,15 +445,30 @@ function ThreadView(props: ThreadViewProps) {
   return (
     <div className={`thread${root.resolved_at !== null ? " resolved" : ""}`}>
       {imageAnchor !== null && (
-        // purely a visual confirmation of the attachment — the chip button
-        // below keeps the hover-preview (a11y: pointer-only affordances stay
-        // on interactive elements) and the click-to-highlight
-        <img
-          className="comment-image-thumb"
-          src={`/assets/${imageAnchor.asset_id}`}
-          alt=""
-          draggable={false}
-        />
+        // the thumbnail is the lightbox entry (dogfooded ask [163]: review +
+        // annotate without hunting the hover affordance) and shows the
+        // comment's own overlay scaled onto it — the shared renderer, no
+        // fork. The chip button below keeps the hover-preview and the
+        // click-to-highlight (a11y: pointer-only affordances stay on
+        // interactive elements).
+        <button
+          type="button"
+          className="comment-thumb"
+          aria-label="open image"
+          onClick={() => {
+            props.onOpenImage(imageAnchor.asset_id);
+          }}
+        >
+          <img
+            className="comment-image-thumb"
+            src={`/assets/${imageAnchor.asset_id}`}
+            alt=""
+            draggable={false}
+          />
+          {imageAnchor.overlay !== undefined && (
+            <ImageOverlayLayer overlay={imageAnchor.overlay} />
+          )}
+        </button>
       )}
       <button
         type="button"

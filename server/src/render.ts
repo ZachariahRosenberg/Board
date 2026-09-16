@@ -174,19 +174,27 @@ const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 const CODE_HIGHLIGHT_THEME = "github-light";
 
 // GFM task lists render `<input type="checkbox" disabled>` — honest markup for
-// a published snapshot (boards are static versions, docs/plan.md), but nothing
-// tells the reader why clicking does nothing. The muted/inert look is CSS
-// (web/src/styles.css, scoped to markdown boards); the title is the one hint
-// CSS cannot carry, so it is added here — AFTER sanitize, on already-sanitized
+// a published snapshot (boards are static versions, docs/plan.md), but a
+// disabled input still LOOKS like an interactive control (dogfooded: "still
+// has checkboxes"). Post-sanitize, the input is replaced outright with a glyph
+// span: no control semantics left, checked state carried by the glyph
+// character (☐ open / ☑ checked), the title kept as the one hint CSS cannot
+// carry, and aria-hidden because the marker is decorative — the list item's
+// own text carries the meaning. Runs AFTER sanitize, on already-sanitized
 // nodes only, never by widening the sanitizer profile (invariant 5).
 // Deliberately NOT applied to html boards (renderHtmlDocument): D18 scripts
 // make their checkboxes genuinely interactive.
-export const TASK_LIST_CHECKBOX_TITLE =
+export const TASK_LIST_TITLE =
   "boards are published snapshots — comment instead";
 
-function annotateTaskListCheckboxes(body: Element): void {
+function replaceTaskListCheckboxes(doc: Document, body: Element): void {
   for (const input of [...body.querySelectorAll('input[type="checkbox"]')]) {
-    input.setAttribute("title", TASK_LIST_CHECKBOX_TITLE);
+    const glyph = doc.createElement("span");
+    glyph.className = "task-glyph";
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.setAttribute("title", TASK_LIST_TITLE);
+    glyph.textContent = input.hasAttribute("checked") ? "☑" : "☐";
+    input.replaceWith(glyph);
   }
 }
 
@@ -208,7 +216,7 @@ export async function renderMarkdownDocument(
   convertMermaidBlocks(doc, body);
   renderMath(doc, body);
   await highlightCodeBlocks(doc, body);
-  annotateTaskListCheckboxes(body);
+  replaceTaskListCheckboxes(doc, body);
   injectAnchorIds(body, false);
   return {
     html: wrapDocument(body.innerHTML),
@@ -216,15 +224,42 @@ export async function renderMarkdownDocument(
   };
 }
 
+// Publish validation for asset embeds. Extends Error, not StoreError: the
+// render pipeline runs INSIDE publishVersion (store.ts imports render.ts), so
+// subclassing StoreError would be a circular import — the ImportRejected
+// precedent (bundle.ts) extends Error for the same reason. daemon.ts maps
+// this to 400 "invalid_asset_embed"; MCP surfaces err.message as the tool
+// error text.
+export class InvalidAssetEmbed extends Error {
+  constructor(src: string) {
+    // the message names the offending src so the agent can find it in their
+    // publish payload — but a src can be arbitrarily long; cap the echo so
+    // one hostile embed cannot produce a multiline error (kept ≤ 120 chars)
+    const named = src.length > 64 ? `${src.slice(0, 61)}…` : src;
+    super(`unknown asset embed "${named}"`);
+    this.name = "InvalidAssetEmbed";
+  }
+}
+
 // Asset embeds (M6): ![alt](asset:<id>) rewrites to /assets/<id> BEFORE
 // sanitize — DOMPurify strips unknown uri schemes, so a post-sanitize rewrite
 // would have nothing left to rewrite (and widening the sanitizer's URI scheme
-// list for asset: is exactly what invariant 5 forbids). Only shape-valid ids
-// (the shared shortId length) rewrite; anything else keeps its asset: URI,
-// which DOMPurify then strips, degrading the img to a visible broken image.
-// Broken-image over drop: a dropped image silently falsifies the document,
-// while a broken image is honest, harmless (no script, same-origin fetch at
-// worst), and shows up in feedback screenshots. Unknown ids 404 at serve time.
+// list for asset: is exactly what invariant 5 forbids).
+//
+// Decision update (dogfooded, live root-cause): an agent script interpolated
+// an undefined variable into "asset:undefined", and the old behavior — keep
+// the asset: URI, let DOMPurify strip it, ship a broken image — silently
+// degraded the embed. Silent degrade was designed for robustness, but the
+// live round showed agents need the actionable 400: a board that silently
+// loses its images falsifies the document, while a rejected publish is
+// recoverable (the agent fixes the src and retries). So a shape-invalid
+// asset: src now throws InvalidAssetEmbed.
+//
+// Scope stays narrow: only asset:-prefixed srcs are validated here.
+// Non-asset: images (external/relative markdown srcs) pass through DOMPurify
+// below as always; unknown-but-shape-valid ids still rewrite and 404 at serve
+// time (the id shape is right — the asset may be minted after the draft).
+// html boards never reach this function (D18 — their markup is their own).
 function rewriteAssetUris(fragment: string): string {
   const doc = new window.DOMParser().parseFromString(fragment, "text/html");
   for (const img of [...doc.body.querySelectorAll("img")]) {
@@ -233,9 +268,10 @@ function rewriteAssetUris(fragment: string): string {
       continue;
     }
     const id = src.slice("asset:".length);
-    if (new RegExp(`^[0-9A-Za-z]{${SHORT_ID_LENGTH}}$`).test(id)) {
-      img.setAttribute("src", `/assets/${id}`);
+    if (!new RegExp(`^[0-9A-Za-z]{${SHORT_ID_LENGTH}}$`).test(id)) {
+      throw new InvalidAssetEmbed(src);
     }
+    img.setAttribute("src", `/assets/${id}`);
   }
   return doc.body.innerHTML;
 }

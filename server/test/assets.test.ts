@@ -418,7 +418,13 @@ describe("svg sanitization at ingest", () => {
     expect(stored).not.toContain("onload");
     expect(stored).not.toContain("evil.example");
     expect(stored).toContain('<svg xmlns="http://www.w3.org/2000/svg"');
-    expect(stored).toContain('<rect fill="#f00"');
+    // attribute order is serializer insertion order — assert the attributes,
+    // not their sequence. Geometry surviving here is the URI-regexp fix
+    // (f8b24da): the old exact-string form broke the moment width/height
+    // stopped being stripped.
+    expect(stored).toContain("<rect");
+    expect(stored).toContain('width="12"');
+    expect(stored).toContain('fill="#f00"');
   });
 
   test("serves the sanitized bytes, never the original", async () => {
@@ -612,31 +618,69 @@ describe("markdown asset embeds", () => {
     expect(version.content).toContain(`src="/assets/${asset.id}"`);
   });
 
-  test("unknown ids degrade to broken images; malformed ids never leak the raw uri", async () => {
+  test("shape-valid unknown ids degrade to honest broken images at serve time", async () => {
     const { s, token } = await setup();
     const board = await makeBoard(s, token);
     const res = await s.api.post(
       `/api/boards/${board.id}/publish`,
       {
         format: "markdown",
-        content: [
-          "![gone](asset:zzzzzzzzzz)",
-          "",
-          "![sneaky](asset:../../../etc/passwd)",
-          "",
-          "![js](asset:javascript:alert(1))",
-        ].join("\n"),
+        content: "![gone](asset:zzzzzzzzzz)",
         expected_version: 0,
       },
       { token },
     );
+    // the id shape is right — the asset may be minted after the draft; the
+    // img points at the serve route and 404s there until it exists
+    expect(res.status).toBe(201);
     const version = (await res.json()) as { content: string };
-    // shape-valid unknown id: honest broken image pointing at the serve route
     expect(version.content).toContain('src="/assets/zzzzzzzzzz"');
-    // malformed ids: the asset: uri is stripped by the sanitizer, nothing traversal-shaped survives
-    expect(version.content).not.toContain("asset:");
-    expect(version.content).not.toContain("etc/passwd");
-    expect(version.content).not.toContain("javascript:");
+  });
+
+  test("malformed asset embeds are a 400 invalid_asset_embed naming the src", async () => {
+    const { s, token } = await setup();
+    const board = await makeBoard(s, token);
+    // "asset:undefined" is the live dogfood root cause: an agent script
+    // interpolated an undefined variable into the embed
+    for (const src of ["asset:undefined", "asset:abc"]) {
+      const res = await s.api.post(
+        `/api/boards/${board.id}/publish`,
+        {
+          format: "markdown",
+          content: `![gone](${src})`,
+          expected_version: 0,
+        },
+        { token },
+      );
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        error: { code: string; message: string };
+      };
+      expect(body.error.code).toBe("invalid_asset_embed");
+      expect(body.error.message).toBe(`unknown asset embed "${src}"`);
+      // nothing was written — the version sequence never advanced
+      const versions = s.db
+        .prepare("SELECT COUNT(*) AS c FROM versions WHERE board_id = ?")
+        .get(board.id) as { c: number };
+      expect(versions.c).toBe(0);
+    }
+  });
+
+  test("non-asset images are not validated — a plain relative src publishes", async () => {
+    const { s, token } = await setup();
+    const board = await makeBoard(s, token);
+    const res = await s.api.post(
+      `/api/boards/${board.id}/publish`,
+      {
+        format: "markdown",
+        content: "![](foo.png)",
+        expected_version: 0,
+      },
+      { token },
+    );
+    expect(res.status).toBe(201);
+    const version = (await res.json()) as { content: string };
+    expect(version.content).toContain('<img src="foo.png"');
   });
 });
 

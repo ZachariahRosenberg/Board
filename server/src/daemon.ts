@@ -24,6 +24,7 @@ import {
   requireJsonContentType,
 } from "./http.ts";
 import { handleMcpNonPost, handleMcpPost, requireMcpActor } from "./mcp.ts";
+import { InvalidAssetEmbed } from "./render.ts";
 import { assetRoutes, isBoardAssetPath, serveAsset } from "./routes/assets.ts";
 import { boardRoutes } from "./routes/boards.ts";
 import { commentRoutes } from "./routes/comments.ts";
@@ -303,6 +304,11 @@ function errorResponse(
   }
   if (err instanceof AssetUnreadable) {
     return jsonError(400, "asset_path_unreadable", err.message, headers);
+  }
+  if (err instanceof InvalidAssetEmbed) {
+    // publish-time validation of markdown asset embeds — the agent's own src
+    // echoed back so the fix is actionable (dogfooded: "asset:undefined")
+    return jsonError(400, "invalid_asset_embed", err.message, headers);
   }
   if (err instanceof InvalidWebhookUrl) {
     return jsonError(400, "invalid_webhook_url", err.message, headers);
