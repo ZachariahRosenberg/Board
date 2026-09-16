@@ -27,6 +27,7 @@ All targets are live (`make list`/`export`/`import` arrived with M6):
 | Install deps | `make deps` (wraps `bun install`) |
 | Wire agents (MCP + skill + tokens) | `make install` (`--force` via `make install FLAGS=--force`) |
 | Test | `make test` (wraps `bun test`) |
+| End-to-end smoke | `make smoke` (temp daemon + scratch ports, never `~/.board`) |
 | Typecheck | `bunx tsc --noEmit` |
 | Lint + format | `bunx biome check --write .` |
 | Run daemon | `make serve` |

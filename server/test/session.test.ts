@@ -145,7 +145,9 @@ describe("GET /api/sessions", () => {
     expect(session?.id).toMatch(/^[0-9a-f]{64}$/);
     expect(session?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(session?.used_at).toBeNull();
-    expect(session?.expires_at).toBeNull();
+    // D19: live sessions expire 30 days after exchange — the inventory shows
+    // the operator when a credential dies on its own
+    expect(session?.expires_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     const spent = body.sessions.find((row) => row.kind === "exchange");
     expect(spent?.used_at).not.toBeNull();
     expect(spent?.expires_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);

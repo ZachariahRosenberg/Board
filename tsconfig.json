@@ -5,5 +5,5 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx"
   },
-  "include": ["server/src", "server/test", "cli/src", "web/src"]
+  "include": ["server/src", "server/test", "cli/src", "web/src", "scripts"]
 }

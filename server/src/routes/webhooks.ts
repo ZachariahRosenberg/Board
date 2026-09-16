@@ -14,8 +14,9 @@ import {
 } from "./route.ts";
 
 // webhook_url is REQUIRED here: webhook-less listening is already auto-detected
-// from real behavior (SSE connections, cursor polls — docs/plan.md), so a
-// registration without a URL has nothing to do.
+// from real behavior (cursor polls — docs/plan.md; D19: SSE connections are
+// delivery only, never presence), so a registration without a URL has nothing
+// to do.
 function subscribeHandler(_req: Request, ctx: RequestContext): Response {
   const body = bodyFields(ctx.body);
   const subscription = subscribeWebhook(ctx.db, ctx.dataDir, ctx.params.id, {

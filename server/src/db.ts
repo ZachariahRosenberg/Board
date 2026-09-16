@@ -129,6 +129,18 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       CREATE INDEX idx_assets_board ON assets (board_id);
     `,
   },
+  {
+    // M7 hardening: live sessions expire 30 days after exchange (sessions.ts
+    // SESSION_TTL_MS). Backfill the pre-TTL rows so no session grandfathered
+    // in as immortal: created_at + 30 days, the same value a fresh exchange
+    // stamps. A sessions-table write — never an event (invariant 4).
+    version: 6,
+    sql: `
+      UPDATE sessions
+      SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+30 days')
+      WHERE kind = 'session' AND expires_at IS NULL;
+    `,
+  },
 ];
 
 export function openDb(dataDir: string): Database {

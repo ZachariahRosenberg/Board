@@ -36,7 +36,7 @@ import {
   getBoardEventsUnbounded,
   mirrorEventFiles,
 } from "./events.ts";
-import { HttpError, MAX_BODY_BYTES } from "./http.ts";
+import { HttpError, MAX_BODY_BYTES, readCappedBody } from "./http.ts";
 import { shortId } from "./ids.ts";
 import { renderHtmlDocument, renderMarkdownDocument } from "./render.ts";
 import {
@@ -889,21 +889,11 @@ export async function importBoard(
   return imported;
 }
 
-// Raw-body reader for the import route (readBinaryAssetBody pattern): honest
-// content-length check before buffering, re-check after.
+// Raw-body reader for the import route: the shared capped read core with the
+// import error type — over-cap bundles are 422 import_rejected, nothing
+// buffered past the cap (docs/security.md "Import quarantine" request cap).
 export async function readImportBody(req: Request): Promise<Uint8Array> {
-  const declared = req.headers.get("content-length");
-  if (declared !== null) {
-    const length = Number(declared);
-    if (Number.isFinite(length) && length > MAX_IMPORT_BYTES) {
-      throw new ImportRejected(
-        `request body exceeds ${MAX_IMPORT_BYTES} bytes`,
-      );
-    }
-  }
-  const bytes = new Uint8Array(await req.arrayBuffer());
-  if (bytes.byteLength > MAX_IMPORT_BYTES) {
+  return readCappedBody(req, MAX_IMPORT_BYTES, () => {
     throw new ImportRejected(`request body exceeds ${MAX_IMPORT_BYTES} bytes`);
-  }
-  return bytes;
+  });
 }

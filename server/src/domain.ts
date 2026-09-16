@@ -131,7 +131,13 @@ export interface BoardEvent {
   payload: Record<string, unknown>;
 }
 
-export type SubscriberKind = "sse" | "cursor" | "webhook";
+// Only the kinds that are actually written: cursor polls and webhook
+// registrations stamp subscribers rows. The schema's `sse` kind (plan.md data
+// model) was never written — the stream is global while presence rows are
+// board-scoped, so there is no board to stamp — and the kind is removed from
+// the domain (D19); the v1 CHECK constraint keeps it (migrations are
+// immutable history), nothing writes it.
+export type SubscriberKind = "cursor" | "webhook";
 
 export interface Subscriber {
   id: string | null;

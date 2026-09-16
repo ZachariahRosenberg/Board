@@ -67,6 +67,7 @@ make open                  # open the web UI in your browser (one-time session t
 make list                  # boards with status, version, unresolved counts
 make export ID=<id>        # self-contained zip bundle of a board
 make import FILE=<id>.zip  # recreate a board from a bundle (D18 quarantine re-runs)
+make smoke                 # self-verifying end-to-end loop check (temp daemon, scratch ports)
 ```
 
 Then, as an agent (or curl):

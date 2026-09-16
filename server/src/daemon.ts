@@ -442,10 +442,16 @@ async function handleHostRequest(
 ): Promise<Response> {
   const { pathname } = new URL(req.url);
   if (isApiPath(pathname)) {
-    return handleApiRequest(req, config, db, dataDir);
+    return withHostHeaders(
+      await handleApiRequest(req, config, db, dataDir),
+      headers,
+    );
   }
   if (pathname === "/mcp") {
-    return handleMcpRequest(req, config, db, dataDir);
+    return withHostHeaders(
+      await handleMcpRequest(req, config, db, dataDir),
+      headers,
+    );
   }
   try {
     assertAllowedHost(req, config);
@@ -476,6 +482,30 @@ async function handleHostRequest(
 // version — never a rewrite), and so are the vendored libs (filenames carry
 // the lib version — the upgrade contract adds a file, never rewrites one).
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+
+// Every response class carries the host headers — CSP + nosniff on api/mcp
+// responses too (the route layer's jsonOk/jsonError know no headers; M7 audit:
+// docs/security.md "API hardening" applies to every request), plus no-cache
+// unless the route pinned its own cache policy (the SSE stream's no-cache, the
+// immutable asset/lib routes — those carry host headers already anyway).
+// Route-set content-type etc. survive: only the host header names are set.
+function withHostHeaders(
+  res: Response,
+  headers: Record<string, string>,
+): Response {
+  const merged = new Headers(res.headers);
+  for (const [name, value] of Object.entries(headers)) {
+    merged.set(name, value);
+  }
+  if (!merged.has("cache-control")) {
+    merged.set("cache-control", "no-cache");
+  }
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: merged,
+  });
+}
 
 // GET /libs/<file> serves the vendored, version-stamped libraries from
 // <repo>/server/libs — D18: board scripts run in the app origin and load

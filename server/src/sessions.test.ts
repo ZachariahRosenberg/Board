@@ -90,7 +90,7 @@ describe("createExchangeToken", () => {
 });
 
 describe("exchangeSession", () => {
-  test("happy path: one-time exchange mints an unexpired session row and returns its plaintext", () => {
+  test("happy path: one-time exchange mints a session row with the 30-day TTL and returns its plaintext", () => {
     const db = freshDb();
     const exchange = createExchangeToken(db);
     const session = exchangeSession(db, exchange);
@@ -99,7 +99,16 @@ describe("exchangeSession", () => {
 
     const sessionRow = rowFor(db, session);
     expect(sessionRow?.kind).toBe("session");
-    expect(sessionRow?.expires_at).toBeNull();
+    // D19 hardening: the live session expires 30 days after exchange.
+    // SESSION_TTL_MS isn't exported from sessions.ts, so the span is computed
+    // inline; 60s tolerance — stamped at exchange, so a tick inside the test
+    // window is fine (mirrors server/test/hardening.test.ts).
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+    const createdMs = Date.parse(sessionRow?.created_at ?? "");
+    const expiresMs = Date.parse(sessionRow?.expires_at ?? "");
+    expect(sessionRow?.expires_at).not.toBeNull();
+    expect(expiresMs - createdMs).toBeGreaterThanOrEqual(thirtyDays - 60_000);
+    expect(expiresMs - createdMs).toBeLessThanOrEqual(thirtyDays);
     expect(sessionRow?.used_at).toBeNull();
     expect(sessionRow?.board_id).toBeNull();
 

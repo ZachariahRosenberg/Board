@@ -1,4 +1,4 @@
-.PHONY: deps install test typecheck lint serve dev token web open list export import
+.PHONY: deps install test typecheck lint serve dev token web open list export import smoke
 
 deps:
 	bun install
@@ -11,6 +11,11 @@ install:
 
 test:
 	bun test
+
+# M7 final smoke: self-verifying end-to-end loop (two agents + a human) against
+# a throwaway daemon — temp BOARD_DATA_DIR + scratch ports, never ~/.board/:7800
+smoke:
+	bun scripts/smoke.ts
 
 typecheck:
 	bunx tsc --noEmit

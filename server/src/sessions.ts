@@ -28,6 +28,12 @@ interface SessionRow {
 
 const TOKEN_BYTES = 32;
 const EXCHANGE_TTL_MS = 10 * 60 * 1000;
+// Live sessions expire (M7 hardening): a bearer token in localStorage never
+// ages on its own, so without a TTL a forgotten credential is valid until
+// someone notices and revokes it. 30 days bounds the leak window; the UI's
+// re-exchange flow / `board open` recovers. Enforced at auth time by
+// verifySessionToken's expires_at check.
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -76,8 +82,13 @@ export function exchangeSession(db: Database, exchangeToken: string): string {
     }
     const sessionToken = newToken();
     db.prepare(
-      "INSERT INTO sessions (token_hash, kind, created_at, board_id) VALUES (?, 'session', ?, ?)",
-    ).run(hashToken(sessionToken), now.toISOString(), row.board_id);
+      "INSERT INTO sessions (token_hash, kind, created_at, expires_at, board_id) VALUES (?, 'session', ?, ?, ?)",
+    ).run(
+      hashToken(sessionToken),
+      now.toISOString(),
+      new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
+      row.board_id,
+    );
     return sessionToken;
   });
   return exchange();
@@ -90,8 +101,9 @@ export function verifySessionToken(db: Database, token: string): boolean {
   if (row === null || row.kind !== "session") {
     return false;
   }
-  // Sessions have no expiry (exchange tokens do); the guard keeps this honest
-  // if a future migration ever adds one.
+  // Enforced at auth time (M7 hardening): session rows carry a 30-day expiry
+  // stamped at exchange; a null expires_at can only be a pre-TTL legacy row —
+  // migration v6 backfilled those, so this guard is just honest if one exists.
   return row.expires_at === null || Date.parse(row.expires_at) > Date.now();
 }
 

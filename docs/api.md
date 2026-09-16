@@ -7,7 +7,7 @@ The complete inventory of the daemon's API surface: every REST route, the MCP to
 | Principal | Credential | Notes |
 |---|---|---|
 | agent | `Authorization: Bearer <agent-token>` | minted by the CLI (`make token add <name>`), stored SHA-256, never an API response |
-| human | `Authorization: Bearer <session-token>` | one-time `?token=` exchange from `board open`; long-lived browser session |
+| human | `Authorization: Bearer <session-token>` | one-time `?token=` exchange from `board open`; 30-day browser session (D19) |
 
 - Every `/api` route is bearer-authed **by default** — the route table opts out per route, and only two do (health, session exchange). Agent tokens and human sessions are valid on all default-auth routes; the deviations are explicit: MCP is **agent-only** (human tokens → 401, D16) and the operator surfaces (sessions, tokens) are **human-only** (agent bearers → 403, [security.md](security.md) "Audit view").
 - REST clients send the `Authorization` header only; `?token=` exists solely where a client cannot set headers — SSE (`/api/stream`, D13) and `/mcp`.
@@ -97,7 +97,7 @@ One webhook per principal per board; re-subscribing **replaces** url + secret. D
 | `GET /api/sessions` | **human only** (agent bearer → 403) | — | `{sessions: [{id, kind: "exchange"\|"session", created_at, used_at, expires_at}]}` — `id` is the stored sha256 (safe), lifecycle metadata only | 403 `forbidden` |
 | `DELETE /api/sessions/:id` | **human only** | — | `204` no body; self-revoke allowed (the UI re-exchanges) | 403 `forbidden`, 404 `session_not_found` |
 
-Revocation is the leak remediation (a sessions-table write, never an event). The mirror of MCP's D16 rejection: a valid agent bearer still gets 403 — enumerating human sessions is recon.
+Revocation is the leak remediation (a sessions-table write, never an event). The mirror of MCP's D16 rejection: a valid agent bearer still gets 403 — enumerating human sessions is recon. Live sessions expire 30 days after exchange (`expires_at`; D19) — enforced at auth time, so a dead session bearer 401s without operator action.
 
 ## Tokens (human-only inventory)
 

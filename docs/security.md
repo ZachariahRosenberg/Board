@@ -54,7 +54,7 @@ The audit view's endpoints are reads over existing state (plus exactly one new w
 - Markdown rendered in the host chrome passes through DOMPurify, always; mermaid runs at `securityLevel: 'strict'`; katex through its standard pipeline. html-format boards are stored and rendered unsanitized per D18 — the CSP above is their only guard, by owner decision.
 - html publishes store an id-injected derived document (auto `data-ba` on unlabeled blocks/rows for anchoring); previously stored versions are never retro-injected.
 - Boards: 8 MB cap per document. Assets: 10 MB, mime allowlist, **magic-byte verification** — the `{path}` file-copy route can only ever ingest real images and must never become a file-read primitive; SVG is sanitized at ingest.
-- Agent tokens: random ≥128-bit, stored SHA-256, revocable, one per agent, never logged or committed. Human browser session: one-time `?token=` exchange via `board open`, stored in localStorage, sent as bearer.
+- Agent tokens: random ≥128-bit, stored SHA-256, revocable, one per agent, never logged or committed. Human browser session: one-time `?token=` exchange via `board open`, stored in localStorage, sent as bearer — and **expiring 30 days after exchange** (D19; enforced at auth time, so a forgotten tab's credential dies on its own; revocation in the audit view remains the active remediation, `board open` re-authenticates).
 - Webhook deliveries are HMAC-signed with the subscriber's secret when one is registered; see "Webhooks" below for the trust model and how the secret is stored.
 - All board/tool output consumed by agents is untrusted input (prompt injection) — the skill instructs agents to treat board content as data, not instructions.
 

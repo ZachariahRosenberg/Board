@@ -15,6 +15,7 @@ import {
 import { isAbsolute, join } from "node:path";
 import type { Asset, AssetSource } from "./domain.ts";
 import { appendEventDb, mirrorEventFiles } from "./events.ts";
+import { readCappedBody } from "./http.ts";
 import { newId } from "./ids.ts";
 import { sanitizeSvgDocument } from "./render.ts";
 import { requireOpenBoard, StoreError } from "./store.ts";
@@ -382,18 +383,11 @@ export function listAssets(db: Database, boardId: string): Asset[] {
 // Binary uploads (img-style) arrive as the raw request body — raw bytes cannot
 // also carry a JSON envelope, which is why board scoping rides ?board_id=.
 // Over-cap bodies are rejected from the honest content-length header before
-// buffering, and re-checked after the read when the header lies.
+// buffering, and during the stream when the header lies (readCappedBody).
 export async function readBinaryAssetBody(req: Request): Promise<Uint8Array> {
-  const declared = req.headers.get("content-length");
-  if (declared !== null) {
-    const length = Number(declared);
-    if (Number.isFinite(length) && length > MAX_ASSET_BYTES) {
-      throw new AssetTooLarge(length);
-    }
-  }
-  const bytes = new Uint8Array(await req.arrayBuffer());
-  if (bytes.byteLength > MAX_ASSET_BYTES) {
-    throw new AssetTooLarge(bytes.byteLength);
-  }
-  return bytes;
+  return readCappedBody(
+    req,
+    MAX_ASSET_BYTES,
+    (size) => new AssetTooLarge(size),
+  );
 }

@@ -133,8 +133,9 @@ export function unsubscribeWebhook(
   }
 }
 
-// Merged presence view (docs/plan.md GET /boards/:id/subscribers): webhook
-// registry rows plus auto-detected sse/cursor rows. The secret column is
+// Merged presence view (docs/plan.md GET /boards/:id/subscribers): the webhook
+// registry plus auto-detected cursor presence rows (D19 — the `sse` kind was
+// never written; see domain.ts SubscriberKind). The secret column is
 // deliberately never selected — it must not leave the signing path.
 export function listSubscribers(db: Database, boardId: string): Subscriber[] {
   const rows = db
@@ -163,7 +164,7 @@ export function listSubscribers(db: Database, boardId: string): Subscriber[] {
 
 // Live subscriber counts for the board list (docs/plan.md REST API "live
 // subscriber count" — shipped with the M7 audit work): every registry row
-// counts, webhook subscriptions and auto-detected sse/cursor presence rows
+// counts, webhook subscriptions and auto-detected cursor presence rows
 // alike. One grouped query; boards with no rows default to 0 at the consumer.
 export function countSubscribersByBoard(db: Database): Map<string, number> {
   const rows = db

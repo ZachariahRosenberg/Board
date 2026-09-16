@@ -50,26 +50,64 @@ function jsonResponse(
 // 8 MB document cap from docs/security.md ("Content rules").
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
-export async function readJsonBody(req: Request): Promise<unknown> {
+// Body-read core for every capped read surface (JSON api, MCP, binary assets,
+// import zips): an honest Content-Length is rejected up front, and a lying or
+// absent one is caught DURING the stream — the cap is enforced chunk-wise, so
+// no route ever buffers unbounded input before checking (M7 hardening; the
+// previous readers awaited req.arrayBuffer() and checked after, leaving a
+// chunked body free to fill memory up to whatever the runtime accepted).
+// tooLarge receives the bytes actually seen (exact for a declared length, a
+// lower bound for the streaming case) so each caller throws its own error
+// type — HttpError 413 / AssetTooLarge / ImportRejected — with no http.ts
+// import of the domain (which would cycle).
+export async function readCappedBody(
+  req: Request,
+  maxBytes: number,
+  tooLarge: (bytes: number) => Error,
+): Promise<Uint8Array> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     const length = Number(declared);
-    if (Number.isFinite(length) && length > MAX_BODY_BYTES) {
-      throw new HttpError(
-        413,
-        "payload_too_large",
-        `request body exceeds ${MAX_BODY_BYTES} bytes`,
-      );
+    if (Number.isFinite(length) && length > maxBytes) {
+      throw tooLarge(length);
     }
   }
-  const bytes = await req.arrayBuffer();
-  if (bytes.byteLength > MAX_BODY_BYTES) {
+  const stream = req.body;
+  if (stream === null) {
+    return new Uint8Array();
+  }
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw tooLarge(total);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+export async function readJsonBody(req: Request): Promise<unknown> {
+  const bytes = await readCappedBody(req, MAX_BODY_BYTES, () => {
     throw new HttpError(
       413,
       "payload_too_large",
       `request body exceeds ${MAX_BODY_BYTES} bytes`,
     );
-  }
+  });
   if (bytes.byteLength === 0) {
     return undefined;
   }
