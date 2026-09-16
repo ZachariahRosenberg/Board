@@ -1,15 +1,15 @@
 import {
   createComment,
   listComments,
+  listCommentsPage,
   maxCommentSeq,
-  recordCursorPresence,
   replyComment,
   resolveComment,
 } from "../comments.ts";
 import type { Board, Comment } from "../domain.ts";
 import { serializeFeedback, threadRootOf } from "../feedback.ts";
-import { HttpError, jsonOk } from "../http.ts";
-import { getBoard } from "../store.ts";
+import { jsonOk } from "../http.ts";
+import { BoardNotFound, getBoard } from "../store.ts";
 import {
   asAnchor,
   asInt,
@@ -17,37 +17,27 @@ import {
   asOptionalString,
   asString,
 } from "../validate.ts";
-import type { RequestContext, Route } from "./route.ts";
+import {
+  actorName,
+  bodyFields,
+  type RequestContext,
+  type Route,
+} from "./route.ts";
 
-function actorName(ctx: RequestContext): string {
-  if (ctx.actor === undefined) {
-    throw new HttpError(
-      500,
-      "internal_error",
-      "authenticated route ran without an actor",
-    );
-  }
-  return ctx.actor.name;
-}
-
+// The store's BoardNotFound maps to 404 board_not_found in daemon.ts's single
+// error-translation point — no hand-rolled HttpError here.
 function requireBoard(ctx: RequestContext, boardId: string): Board {
   const board = getBoard(ctx.db, boardId);
   if (board === null) {
-    throw new HttpError(404, "board_not_found", `board "${boardId}" not found`);
+    throw new BoardNotFound(boardId);
   }
   return board;
-}
-
-function bodyFields(ctx: RequestContext): Record<string, unknown> {
-  return typeof ctx.body === "object" && ctx.body !== null
-    ? (ctx.body as Record<string, unknown>)
-    : {};
 }
 
 function createCommentHandler(_req: Request, ctx: RequestContext): Response {
   const boardId = ctx.params.id;
   requireBoard(ctx, boardId);
-  const body = bodyFields(ctx);
+  const body = bodyFields(ctx.body);
   const comment = createComment(ctx.db, ctx.dataDir, boardId, {
     anchor: asAnchor(body.anchor, "anchor"),
     // absent body reaches the store's emptiness rule, which allows an
@@ -61,7 +51,7 @@ function createCommentHandler(_req: Request, ctx: RequestContext): Response {
 }
 
 function replyHandler(_req: Request, ctx: RequestContext): Response {
-  const body = bodyFields(ctx);
+  const body = bodyFields(ctx.body);
   const comment = replyComment(ctx.db, ctx.dataDir, ctx.params.id, {
     body: asString(body.body, "body"),
     actor: actorName(ctx),
@@ -79,20 +69,15 @@ function resolveHandler(_req: Request, ctx: RequestContext): Response {
   return jsonOk(comment);
 }
 
+// The cursor-read sequence (board exists → presence → page → last_seq) lives
+// in the service layer — the MCP tool is the same call now, and the M7 audit
+// view becomes a third thin consumer.
 function listCommentsHandler(req: Request, ctx: RequestContext): Response {
-  const boardId = ctx.params.id;
-  requireBoard(ctx, boardId);
   const since = asNonNegativeIntString(
     new URL(req.url).searchParams.get("since"),
     "since",
   );
-  recordCursorPresence(ctx.db, boardId, ctx.actor);
-  const comments = listComments(ctx.db, boardId, since);
-  const lastSeq = maxCommentSeq(ctx.db, boardId);
-  return jsonOk({
-    comments,
-    last_seq: comments.length > 0 ? (comments.at(-1)?.seq ?? lastSeq) : lastSeq,
-  });
+  return jsonOk(listCommentsPage(ctx.db, ctx.params.id, ctx.actor, since));
 }
 
 // Threads touched after `since` render IN FULL (root + all replies) — feedback

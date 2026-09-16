@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createExchangeToken, exchangeSession } from "../src/sessions.ts";
 import { startTestServer, type TestServer } from "./helpers.ts";
 
 let s: TestServer;
@@ -152,6 +153,25 @@ describe("GET /api/stream (SSE)", () => {
 
   test("401 without a token", async () => {
     const res = await fetch(`${s.hostUrl}/api/stream`);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("unauthorized");
+  });
+
+  test("a human session token also authenticates the stream (agent-or-human)", async () => {
+    const session = exchangeSession(s.db, createExchangeToken(s.db));
+    const res = await fetch(`${s.hostUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${session}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    await res.body?.cancel();
+  });
+
+  test("401 for an unknown token", async () => {
+    const res = await fetch(`${s.hostUrl}/api/stream`, {
+      headers: { authorization: "Bearer not-a-token" },
+    });
     expect(res.status).toBe(401);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("unauthorized");

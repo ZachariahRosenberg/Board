@@ -1,6 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db.ts";
@@ -41,6 +47,65 @@ const HTML_DOC = [
   '<div data-ba="s1" data-ba-label="Panel"><p>widget</p></div>',
   "</body></html>",
 ].join("");
+
+// Regression for the write-order invariant (events.ts:41 — the db row commits
+// first, the jsonl mirrors are written after). The seam: replace the global
+// events.jsonl FILE with a DIRECTORY, so the mirror's appendFileSync throws
+// EISDIR — a crash-shaped failure of the mirror step alone. The event row and
+// the version must still be committed (mirrors may lag the db, never lead
+// it); the pre-consolidation code mirrored INSIDE the transaction, so this
+// failure rolled the whole write back and the assertions below failed.
+describe("event mirror discipline (db first, mirrors after commit)", () => {
+  test("a failing jsonl mirror does not roll back the committed publish", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "board-store-mirror-test-"));
+    const db = openDb(dataDir);
+    try {
+      const board = createBoard(db, dataDir, {
+        title: "Mirror",
+        format: "markdown",
+        actor: "human",
+      });
+      rmSync(join(dataDir, "events.jsonl"));
+      mkdirSync(join(dataDir, "events.jsonl"));
+      await expect(
+        publishVersion(db, dataDir, board.id, {
+          format: "markdown",
+          content: MD_V1,
+          expected_version: 0,
+          actor: "agent-1",
+        }),
+      ).rejects.toThrow();
+      expect(getEvents(db).some((ev) => ev.type === "board.published")).toBe(
+        true,
+      );
+      expect(getVersion(db, board.id, 1)).not.toBeNull();
+      expect(getBoard(db, board.id)?.current_version).toBe(1);
+    } finally {
+      db.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failing jsonl mirror does not roll back the committed end", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "board-store-mirror-end-"));
+    const db = openDb(dataDir);
+    try {
+      const board = createBoard(db, dataDir, {
+        title: "Mirror end",
+        format: "markdown",
+        actor: "human",
+      });
+      rmSync(join(dataDir, "events.jsonl"));
+      mkdirSync(join(dataDir, "events.jsonl"));
+      expect(() => endBoard(db, dataDir, board.id, "human")).toThrow();
+      expect(getBoard(db, board.id)?.status).toBe("ended");
+      expect(getEvents(db).some((ev) => ev.type === "board.ended")).toBe(true);
+    } finally {
+      db.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
 
 function readLines(path: string): string[] {
   return readFileSync(path, "utf8")

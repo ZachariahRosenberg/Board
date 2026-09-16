@@ -7,6 +7,7 @@ import {
   revokeToken,
   TokenNameTaken,
 } from "../../../server/src/tokens.ts";
+import { renderTable } from "../table.ts";
 
 export interface CommandIo {
   stdout(text: string): void;
@@ -79,19 +80,8 @@ function tokenList(db: Database, io: CommandIo): number {
     info.last_used_at ?? "never",
     info.revoked_at === null ? "no" : "yes",
   ]);
-  const widths = header.map(
-    (label, i) =>
-      label.length +
-      rows.reduce((max, row) => Math.max(max, row[i].length - label.length), 0),
-  );
-  const render = (cells: string[]) =>
-    cells
-      .map((cell, i) => cell.padEnd(widths[i], " "))
-      .join("  ")
-      .trimEnd();
-  io.stdout(render(header));
-  for (const row of rows) {
-    io.stdout(render(row));
+  for (const line of renderTable(header, rows)) {
+    io.stdout(line);
   }
   return 0;
 }

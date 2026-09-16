@@ -5,6 +5,7 @@ import { getAsset } from "./assets.ts";
 import type {
   Actor,
   Anchor,
+  Board,
   Comment,
   ImageOverlay,
   Version,
@@ -16,6 +17,7 @@ import {
   BoardNotFound,
   getBoard,
   getVersion,
+  listBoards,
   StoreError,
   VersionNotFound,
 } from "./store.ts";
@@ -419,6 +421,43 @@ export function maxCommentSeq(db: Database, boardId: string): number {
     .prepare("SELECT MAX(seq) AS m FROM comments WHERE board_id = ?")
     .get(boardId) as { m: number | null };
   return row.m ?? 0;
+}
+
+// The shared cursor read: board must exist (404 via BoardNotFound), an agent
+// poll counts as presence, then the page plus its last_seq cursor. REST
+// GET /boards/:id/comments and MCP board_get_comments were byte-identical
+// copies of this sequence; THREE surfaces consume it once the M7 audit view
+// lands (docs/plan.md) — that third consumer is why this is extracted now.
+export function listCommentsPage(
+  db: Database,
+  boardId: string,
+  actor: Actor | undefined,
+  since?: number,
+): { comments: Comment[]; last_seq: number } {
+  if (getBoard(db, boardId) === null) {
+    throw new BoardNotFound(boardId);
+  }
+  recordCursorPresence(db, boardId, actor);
+  const comments = listComments(db, boardId, since);
+  const lastSeq = maxCommentSeq(db, boardId);
+  return {
+    comments,
+    last_seq: comments.length > 0 ? (comments.at(-1)?.seq ?? lastSeq) : lastSeq,
+  };
+}
+
+export interface BoardWithCommentCounts extends Board {
+  unresolved_comments: number;
+}
+
+// The board list with unresolved root-comment counts attached (docs/plan.md
+// REST API) — shared by REST GET /boards and MCP board_list; the M7 audit
+// view is the planned third consumer (same rationale as listCommentsPage).
+export function boardsWithCounts(db: Database): BoardWithCommentCounts[] {
+  return listBoards(db).map((board) => ({
+    ...board,
+    unresolved_comments: countUnresolvedRoots(db, board.id),
+  }));
 }
 
 // Cursor reads double as agent presence (docs/plan.md "Subscriptions, callbacks

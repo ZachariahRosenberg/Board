@@ -469,6 +469,14 @@ const ASSET_REF_PATTERNS = [
   /src="\/assets\/([0-9A-Za-z]{10})"/g,
 ];
 
+// The remap regex is those two validation patterns joined as one alternation
+// — derived, not re-typed, so the two encodings cannot drift: group 1 is the
+// `asset:` embed id, group 2 the html src id.
+const ASSET_REF_REMAP_PATTERN = new RegExp(
+  ASSET_REF_PATTERNS.map((pattern) => pattern.source).join("|"),
+  "g",
+);
+
 // Asset ids are remapped BEFORE the version re-renders (markdown `asset:`
 // embeds and html src="/assets/<id>" references). Anything referencing an id
 // the bundle does not carry is rejected in validation: imports are
@@ -476,7 +484,7 @@ const ASSET_REF_PATTERNS = [
 // resolve to a DIFFERENT board's asset (the asset index is global).
 function remapAssetRefs(source: string, map: Map<string, string>): string {
   return source.replace(
-    /asset:([0-9A-Za-z]{10})|src="\/assets\/([0-9A-Za-z]{10})"/g,
+    ASSET_REF_REMAP_PATTERN,
     (whole, mdId: string | undefined, htmlId: string | undefined) => {
       const oldId = mdId ?? htmlId;
       if (oldId === undefined) {

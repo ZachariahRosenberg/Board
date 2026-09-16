@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requireAuth } from "./auth.ts";
+import { requireAuth, resolveActor } from "./auth.ts";
 import { openDb } from "./db.ts";
 import { HttpError } from "./http.ts";
 import { createExchangeToken, exchangeSession } from "./sessions.ts";
@@ -24,6 +24,34 @@ function freshDb(): Database {
 }
 
 const API_URL = "http://127.0.0.1:7800/api/health";
+
+// The agent-vs-human acceptance matrix for the shared token→Actor core, which
+// the header-only REST path, the MCP endpoint (human-rejecting), and the SSE
+// stream (human-accepting) all sit on.
+describe("resolveActor", () => {
+  test("an agent token resolves to the agent actor", () => {
+    const db = freshDb();
+    const { token } = createToken(db, { name: "alice" });
+    expect(resolveActor(db, token)).toEqual({ kind: "agent", name: "alice" });
+    db.close();
+  });
+
+  test("a session token resolves to the human actor", () => {
+    const db = freshDb();
+    const session = exchangeSession(db, createExchangeToken(db));
+    expect(resolveActor(db, session)).toEqual({ kind: "human", name: "human" });
+    db.close();
+  });
+
+  test("an unknown or revoked token resolves to null (no throw)", () => {
+    const db = freshDb();
+    const { token } = createToken(db, { name: "alice" });
+    revokeToken(db, "alice");
+    expect(resolveActor(db, token)).toBeNull();
+    expect(resolveActor(db, "definitely-not-issued")).toBeNull();
+    db.close();
+  });
+});
 
 function request(headers: Record<string, string>): Request {
   return new Request(API_URL, { headers });

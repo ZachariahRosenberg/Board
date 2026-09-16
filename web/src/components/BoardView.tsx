@@ -23,6 +23,7 @@ import { formatDate } from "../format.ts";
 import { assetIdFromSrc } from "../image.ts";
 import { BoardStream } from "../sse.ts";
 import { CommentSidebar } from "./CommentSidebar.tsx";
+import { ImageLightbox } from "./ImageLightbox.tsx";
 import { ImageOverlayLayer } from "./ImageOverlaySvg.tsx";
 
 // Markdown content was sanitized server-side at publish (script-free by
@@ -232,24 +233,6 @@ export function BoardView({ id }: { id: string }) {
       root.removeEventListener("click", onClick);
     };
   }, [version, data]);
-
-  // Escape closes the lightbox (the keyboard close path, alongside the close
-  // button). No focus trap for v1: the modal is read-only review with two
-  // real buttons — a trap is overkill and this modal never stacks.
-  useEffect(() => {
-    if (lightbox === null) {
-      return;
-    }
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setLightbox(null);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [lightbox]);
 
   // Live updates (SSE): any event for this board refreshes comments; board
   // lifecycle events also refresh the board meta. Reconnect is EventSource's.
@@ -572,72 +555,32 @@ export function BoardView({ id }: { id: string }) {
           {affordance.label}
         </button>
       )}
-      {/* the image lightbox (dogfooded ask [163]): full-size review of one
-          asset with every image-anchored overlay for it stacked (each thread
-          contributes its own layer — the shared renderer, no fork). Backdrop
-          click closes (only the backdrop itself, not clicks inside the image
-          box); Escape and the close button are the keyboard paths; no focus
-          trap for v1 (read-only modal, never stacks — see the effect above). */}
+      {/* the image lightbox (dogfooded ask [163]) reviews one asset full
+          size with every image-anchored overlay for it stacked; annotate
+          routes back through this component's pendingAnchor flow */}
       {lightbox !== null && (
-        // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click is a pointer-only extra — Escape and the close button close for keyboard users
-        // biome-ignore lint/a11y/useKeyWithClickEvents: see above
-        <div
-          className="lightbox-backdrop"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setLightbox(null);
-            }
+        <ImageLightbox
+          assetId={lightbox.assetId}
+          overlays={lightboxOverlays}
+          canAnnotate={board.status === "open"}
+          onAnnotate={() => {
+            // the floating "annotate image" button's exact flow: stage
+            // the image anchor as a pending composer anchor and let
+            // the sidebar own the editor — one editor implementation,
+            // no fork (the composer holds the preview and its annotate
+            // affordance)
+            setPendingAnchor({
+              type: "image",
+              asset_id: lightbox.assetId,
+            });
+            setLightbox(null);
+            selectionActiveRef.current = false;
+            pinnedRef.current = false;
           }}
-        >
-          <div className="lightbox" role="dialog" aria-label="image preview">
-            <div className="lightbox-toolbar">
-              <span className="lightbox-title">{lightbox.assetId}</span>
-              {board.status === "open" && (
-                <button
-                  type="button"
-                  className="pill"
-                  onClick={() => {
-                    // the floating "annotate image" button's exact flow: stage
-                    // the image anchor as a pending composer anchor and let
-                    // the sidebar own the editor — one editor implementation,
-                    // no fork (the composer holds the preview and its annotate
-                    // affordance)
-                    setPendingAnchor({
-                      type: "image",
-                      asset_id: lightbox.assetId,
-                    });
-                    setLightbox(null);
-                    selectionActiveRef.current = false;
-                    pinnedRef.current = false;
-                  }}
-                >
-                  annotate
-                </button>
-              )}
-              <button
-                type="button"
-                className="pill active"
-                onClick={() => {
-                  setLightbox(null);
-                }}
-              >
-                close
-              </button>
-            </div>
-            {/* hugs the img like the editor's stage, so the overlay layers
-                measure exactly the displayed image box */}
-            <div className="lightbox-stage">
-              <img
-                src={`/assets/${lightbox.assetId}`}
-                alt=""
-                draggable={false}
-              />
-              {lightboxOverlays.map(({ id, overlay }) => (
-                <ImageOverlayLayer key={id} overlay={overlay} />
-              ))}
-            </div>
-          </div>
-        </div>
+          onClose={() => {
+            setLightbox(null);
+          }}
+        />
       )}
     </div>
   );

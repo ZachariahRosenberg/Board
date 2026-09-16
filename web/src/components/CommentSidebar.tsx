@@ -5,6 +5,7 @@ import type {
   Comment,
   ImageAnchor,
 } from "../../../server/src/domain.ts";
+import { threadRootOf } from "../../../server/src/feedback.ts";
 import { anchorDescriptor, BOARD_ANCHOR } from "../anchor.ts";
 import {
   createComment,
@@ -212,20 +213,11 @@ export function CommentSidebar(props: CommentSidebarProps) {
   const unresolved = threads.filter(
     (thread) => thread.resolved_at === null,
   ).length;
-  const rootOf = (comment: Comment): Comment | null => {
-    let current: Comment | undefined = comment;
-    const seen = new Set<string>();
-    while (current !== undefined && current.in_reply_to !== null) {
-      if (seen.has(current.id)) {
-        return null;
-      }
-      seen.add(current.id);
-      current = comments?.find(
-        (candidate) => candidate.id === current?.in_reply_to,
-      );
-    }
-    return current ?? null;
-  };
+  // Same cycle-safe walk as the server's feedback serializer — imported (it
+  // is pure), so the web UI and the feedback markdown can never disagree
+  // about which thread a reply belongs to
+  const rootOf = (comment: Comment): Comment | null =>
+    threadRootOf(comments ?? [], comment);
   const repliesOf = (root: Comment): Comment[] =>
     (comments ?? [])
       .filter(

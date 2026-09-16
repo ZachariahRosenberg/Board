@@ -3,7 +3,9 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BoardEvent, EventType } from "./domain.ts";
 
-interface EventInput {
+// Exported because store.ts's shared commitVersion takes a pre-built event:
+// the caller names type/payload, commitVersion owns WHEN it commits (in-tx).
+export interface EventInput {
   actor: string;
   type: EventType;
   boardId?: string;

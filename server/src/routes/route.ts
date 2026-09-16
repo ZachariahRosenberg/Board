@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Actor } from "../domain.ts";
+import { HttpError } from "../http.ts";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -9,6 +10,31 @@ export interface RequestContext {
   actor?: Actor;
   db: Database;
   dataDir: string;
+}
+
+// Authed routes always get an actor from the daemon middleware; this guard
+// only fires on a route-table misconfiguration. Shared by every route file
+// that needs the actor's name (was copy-pasted in boards/comments/assets/
+// webhooks).
+export function actorName(ctx: RequestContext): string {
+  if (ctx.actor === undefined) {
+    throw new HttpError(
+      500,
+      "internal_error",
+      "authenticated route ran without an actor",
+    );
+  }
+  return ctx.actor.name;
+}
+
+// Non-object bodies read as {} so field validators reject them with the
+// missing field name (e.g. "title must be a string") instead of crashing.
+// Takes the raw body value (not the ctx) so raw-body routes can hand it a
+// body they parsed themselves.
+export function bodyFields(body: unknown): Record<string, unknown> {
+  return typeof body === "object" && body !== null
+    ? (body as Record<string, unknown>)
+    : {};
 }
 
 export interface Route {

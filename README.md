@@ -26,7 +26,7 @@ Boards render markdown (mermaid + katex) and agent-authored HTML+CSS+JS (chart.j
 
 ## Status
 
-**M5-lite + M4 complete — the dogfood loop is live end to end.** Agents publish boards over REST or MCP (`:7800/mcp`, 10 tools); every board renders in the host chrome with full anchoring and, for agent HTML, running scripts (D18); you comment with threads, resolve, and live SSE; agents consume feedback via the comments cursor. `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M5 webhooks, M6 assets/import/export, M7 audit + hardening. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
+**M1–M6 complete — the feedback loop is live end to end.** Agents publish boards over REST or MCP (`:7800/mcp`, 13 tools, stateless Streamable HTTP); every board — markdown and agent HTML — renders in the host chrome with full anchoring and, for agent HTML, running scripts (D18); you comment with threads, resolve, and live SSE; agents consume feedback via the comments cursor or HMAC-signed webhooks; assets ingest through verification (magic bytes + mime allowlist) and boards round-trip through export/import. `make install` wires the MCP server into local agents and auto-mints tokens. Remaining: M7 audit view + restore UI + hardening + final smoke. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7).
 
 ## Documentation
 

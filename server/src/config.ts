@@ -23,6 +23,9 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 7800;
 const DEFAULT_BIND = ["127.0.0.1"];
 const MAX_PORT = 65535;
+// why whitespace + slash: a hostname with "/" could traverse paths when the
+// origin URL is built from it, whitespace could smuggle header structure
+// (injection) — a hostname is one flat token, nothing else survives.
 const HOSTNAME_FORBIDDEN = /[\s/]/;
 
 function readString(env: Env, name: string, fallback: string): string {

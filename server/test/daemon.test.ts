@@ -54,14 +54,6 @@ describe("host server (api)", () => {
   });
 });
 
-describe("GET /api/origin (removed by D18)", () => {
-  test("the endpoint is gone — a plain 404", async () => {
-    const res = await server().api.get("/api/origin");
-    expect(res.status).toBe(404);
-    expect(await errorCode(res)).toBe("not_found");
-  });
-});
-
 describe("host server: GET /libs/<file> (D18)", () => {
   test("serves the vendored chart.js build with immutable cache and host headers", async () => {
     const s = server();

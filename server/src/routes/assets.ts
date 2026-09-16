@@ -9,24 +9,12 @@ import {
 } from "../assets.ts";
 import { HttpError, jsonError, jsonOk, readJsonBody } from "../http.ts";
 import { asString } from "../validate.ts";
-import type { RequestContext, Route } from "./route.ts";
-
-function actorName(ctx: RequestContext): string {
-  if (ctx.actor === undefined) {
-    throw new HttpError(
-      500,
-      "internal_error",
-      "authenticated route ran without an actor",
-    );
-  }
-  return ctx.actor.name;
-}
-
-function bodyFields(body: unknown): Record<string, unknown> {
-  return typeof body === "object" && body !== null
-    ? (body as Record<string, unknown>)
-    : {};
-}
+import {
+  actorName,
+  bodyFields,
+  type RequestContext,
+  type Route,
+} from "./route.ts";
 
 // Variant discrimination (docs/security.md "Assets"): the binary variant is
 // raw image bytes — an img-style upload cannot also carry a JSON envelope —

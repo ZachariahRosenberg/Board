@@ -9,7 +9,7 @@ import type {
   Version,
   VersionMeta,
 } from "./domain.ts";
-import { appendEvent } from "./events.ts";
+import { appendEventDb, type EventInput, mirrorEventFiles } from "./events.ts";
 import { MAX_BODY_BYTES } from "./http.ts";
 import { newId } from "./ids.ts";
 import { renderHtmlDocument, renderMarkdownDocument } from "./render.ts";
@@ -63,6 +63,20 @@ export class ContentTooLarge extends StoreError {
     );
     this.name = "ContentTooLarge";
   }
+}
+
+// Shared "board exists and is open" gate for every write path (assets imports
+// it too): BoardNotFound for unknown ids, BoardEnded for writes after end
+// (docs/plan.md: end → writes 409).
+export function requireOpenBoard(db: Database, boardId: string): Board {
+  const board = getBoard(db, boardId);
+  if (board === null) {
+    throw new BoardNotFound(boardId);
+  }
+  if (board.status !== "open") {
+    throw new BoardEnded(boardId);
+  }
+  return board;
 }
 
 interface BoardRow {
@@ -167,27 +181,35 @@ export function createBoard(
     created_at: new Date().toISOString(),
     current_version: 0,
   };
-  db.prepare(
-    "INSERT INTO boards (id, title, format, status, tags, created_by, created_at, current_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    board.id,
-    board.title,
-    board.format,
-    board.status,
-    JSON.stringify(board.tags),
-    board.created_by,
-    board.created_at,
-    board.current_version,
-  );
+  // Write-order discipline (events.ts:41): the db row and its event commit
+  // together in this transaction; the bundle files (dirs, board.json, jsonl
+  // mirrors) are written after the commit — on a crash the files can lag the
+  // db but never lead it.
+  const write = db.transaction(() => {
+    db.prepare(
+      "INSERT INTO boards (id, title, format, status, tags, created_by, created_at, current_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      board.id,
+      board.title,
+      board.format,
+      board.status,
+      JSON.stringify(board.tags),
+      board.created_by,
+      board.created_at,
+      board.current_version,
+    );
+    return appendEventDb(db, {
+      actor: input.actor,
+      type: "board.created",
+      boardId: id,
+      payload: { title: board.title, format: board.format },
+    });
+  });
+  const ev = write();
   mkdirSync(versionsDir(dataDir, id), { recursive: true });
   mkdirSync(join(dataDir, "boards", id, "assets"), { recursive: true });
   writeBoardJson(dataDir, board);
-  appendEvent(db, dataDir, {
-    actor: input.actor,
-    type: "board.created",
-    boardId: id,
-    payload: { title: board.title, format: board.format },
-  });
+  mirrorEventFiles(dataDir, ev);
   return board;
 }
 
@@ -220,13 +242,7 @@ export async function publishVersion(
   boardId: string,
   input: PublishVersionInput,
 ): Promise<Version> {
-  const board = getBoard(db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
-  if (board.status !== "open") {
-    throw new BoardEnded(boardId);
-  }
+  const board = requireOpenBoard(db, boardId);
   if (input.expected_version !== board.current_version) {
     throw new VersionConflict(
       boardId,
@@ -265,7 +281,6 @@ export async function publishVersion(
   writeVersionBundle(dataDir, boardId, n, content, sourceMd);
   writeBoardJson(dataDir, { ...board, current_version: n });
 
-  const createdAt = new Date().toISOString();
   const payload: Record<string, unknown> = { n, format: input.format };
   if (input.label !== undefined) {
     payload.label = input.label;
@@ -273,42 +288,86 @@ export async function publishVersion(
   if (input.note !== undefined) {
     payload.note = input.note;
   }
-  // Bundle files land before the db transaction: an orphan file after a crash
-  // is harmless (no row points at it), but a committed row without its file is
-  // not — the db is the source of truth and must never reference missing
-  // files. The (board_id, n) PK is the backstop against racing publishers:
-  // the second INSERT fails and rolls back, only its orphan file remains.
+  return commitVersion(
+    db,
+    dataDir,
+    boardId,
+    n,
+    {
+      label: input.label ?? null,
+      note: input.note ?? null,
+      content,
+      source_md: sourceMd,
+      anchors,
+      actor: input.actor,
+      created_at: new Date().toISOString(),
+    },
+    {
+      actor: input.actor,
+      type: "board.published",
+      boardId,
+      payload,
+    },
+  );
+}
+
+// Shared publish/restore tail (the two were ~80% duplicated). Callers have
+// already rendered and written the bundle files (writeVersionBundle +
+// writeBoardJson) — write-order invariants live here, at the one site both
+// paths share:
+//
+// Bundle files FIRST, db second: an orphan file after a crash is harmless (no
+// row points at it), but a committed row without its file is not — the db is
+// the source of truth and must never reference missing files. The (board_id,
+// n) PK is the backstop against racing publishers: the second INSERT fails
+// and rolls back, leaving only its orphan file.
+//
+// EVENTS run the opposite discipline (events.ts:41: db row first, file
+// mirrors second): appendEventDb commits INSIDE this transaction and the
+// jsonl mirrors are written AFTER it — on a crash the mirrors can lag the db
+// but never lead it. Same pattern as comments.ts/webhooks.ts/assets.ts.
+function commitVersion(
+  db: Database,
+  dataDir: string,
+  boardId: string,
+  n: number,
+  fields: {
+    label: string | null;
+    note: string | null;
+    content: string;
+    source_md: string | null;
+    anchors: ExtractedAnchor[];
+    actor: string;
+    created_at: string;
+  },
+  event: EventInput,
+): Version {
   const write = db.transaction(() => {
     db.prepare(
       "INSERT INTO versions (board_id, n, label, note, content, source_md, anchors, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(
       boardId,
       n,
-      input.label ?? null,
-      input.note ?? null,
-      content,
-      sourceMd,
-      JSON.stringify(anchors),
-      input.actor,
-      createdAt,
+      fields.label,
+      fields.note,
+      fields.content,
+      fields.source_md,
+      JSON.stringify(fields.anchors),
+      fields.actor,
+      fields.created_at,
     );
     db.prepare("UPDATE boards SET current_version = ? WHERE id = ?").run(
       n,
       boardId,
     );
-    appendEvent(db, dataDir, {
-      actor: input.actor,
-      type: "board.published",
-      boardId,
-      payload,
-    });
+    return appendEventDb(db, event);
   });
-  write();
-
+  const appended = write();
+  mirrorEventFiles(dataDir, appended);
   const version = getVersion(db, boardId, n);
   if (version === null) {
     throw new StoreError(
-      `version ${n} of board "${boardId}" missing after publish`,
+      `version ${n} of board "${boardId}" missing after commit`,
     );
   }
   return version;
@@ -365,14 +424,24 @@ export function endBoard(
     throw new BoardEnded(boardId);
   }
   const ended: Board = { ...board, status: "ended" };
-  db.prepare("UPDATE boards SET status = ? WHERE id = ?").run("ended", boardId);
-  writeBoardJson(dataDir, ended);
-  appendEvent(db, dataDir, {
-    actor,
-    type: "board.ended",
-    boardId,
-    payload: {},
+  // UPDATE + event commit atomically (a board must never read as ended while
+  // its board.ended event is missing); bundle files mirror after the commit —
+  // same write-order discipline as the other store writes (events.ts:41).
+  const write = db.transaction(() => {
+    db.prepare("UPDATE boards SET status = ? WHERE id = ?").run(
+      "ended",
+      boardId,
+    );
+    return appendEventDb(db, {
+      actor,
+      type: "board.ended",
+      boardId,
+      payload: {},
+    });
   });
+  const ev = write();
+  writeBoardJson(dataDir, ended);
+  mirrorEventFiles(dataDir, ev);
   return ended;
 }
 
@@ -391,13 +460,7 @@ export async function restoreVersion(
   boardId: string,
   input: RestoreVersionInput,
 ): Promise<Version> {
-  const board = getBoard(db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
-  if (board.status !== "open") {
-    throw new BoardEnded(boardId);
-  }
+  const board = requireOpenBoard(db, boardId);
   if (input.expected_version !== board.current_version) {
     throw new VersionConflict(
       boardId,
@@ -414,41 +477,25 @@ export async function restoreVersion(
   writeVersionBundle(dataDir, boardId, n, from.content, from.source_md);
   writeBoardJson(dataDir, { ...board, current_version: n });
 
-  const createdAt = new Date().toISOString();
-  // same write-order rationale as publishVersion: files first, db transaction
-  // second, (board_id, n) PK backstop
-  const write = db.transaction(() => {
-    db.prepare(
-      "INSERT INTO versions (board_id, n, label, note, content, source_md, anchors, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      boardId,
-      n,
-      `restore of v${input.from_n}`,
-      null,
-      from.content,
-      from.source_md,
-      JSON.stringify(from.anchors),
-      input.actor,
-      createdAt,
-    );
-    db.prepare("UPDATE boards SET current_version = ? WHERE id = ?").run(
-      n,
-      boardId,
-    );
-    appendEvent(db, dataDir, {
+  return commitVersion(
+    db,
+    dataDir,
+    boardId,
+    n,
+    {
+      label: `restore of v${input.from_n}`,
+      note: null,
+      content: from.content,
+      source_md: from.source_md,
+      anchors: from.anchors,
+      actor: input.actor,
+      created_at: new Date().toISOString(),
+    },
+    {
       actor: input.actor,
       type: "board.restored",
       boardId,
       payload: { from: input.from_n, to: n },
-    });
-  });
-  write();
-
-  const version = getVersion(db, boardId, n);
-  if (version === null) {
-    throw new StoreError(
-      `version ${n} of board "${boardId}" missing after restore`,
-    );
-  }
-  return version;
+    },
+  );
 }

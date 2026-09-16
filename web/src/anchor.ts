@@ -75,6 +75,13 @@ export function anchorForElement(el: Element): SectionAnchor | RowAnchor {
   return { type: "section", section_id: id };
 }
 
+// TWIN of the unexported anchorDescriptor in server/src/feedback.ts (the
+// feedback-markdown heading label): same switch, and the two MUST move
+// together when anchor types change. They stay two because the quote style
+// genuinely differs per medium — this copy renders the typographic quotes
+// users read in the UI (asserted in tests), the feedback grammar uses ASCII
+// quotes agents parse — and single-homing would require exporting from a
+// server module this web-first dedupe cannot reach.
 export function anchorDescriptor(anchor: Anchor): string {
   switch (anchor.type) {
     case "board":

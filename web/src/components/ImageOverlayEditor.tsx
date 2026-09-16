@@ -141,8 +141,8 @@ export function ImageOverlayEditor({
       : { ...overlay, arrows: [...overlay.arrows, draft] };
 
   return (
-    <div className="overlay-editor-backdrop">
-      <div className="overlay-editor">
+    <div className="modal-backdrop overlay-editor-backdrop">
+      <div className="modal overlay-editor">
         <div className="overlay-editor-toolbar">
           <button
             type="button"

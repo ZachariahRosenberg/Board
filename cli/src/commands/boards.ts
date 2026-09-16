@@ -4,18 +4,18 @@
 // (invariant 3) and reads want the same view agents see.
 import type { Config } from "../../../server/src/config.ts";
 import { originUrlFor } from "../../../server/src/daemon.ts";
+import { renderTable } from "../table.ts";
+import {
+  bearer,
+  errorMessage,
+  type FetchLike,
+  type ParsedArgs,
+  parseArgs,
+} from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
 export const BOARDS_USAGE =
   "usage: board list | board export <board_id> [file] | board import <file>";
-
-// The commands only ever call fetch with (url, init) — the seam's fakes don't
-// implement the platform fetch surface (preconnect), so the field type is the
-// narrow shape the commands use.
-type FetchLike = (
-  url: string | URL,
-  init?: RequestInit,
-) => Response | Promise<Response>;
 
 interface BoardsCommandInput {
   config: Config;
@@ -24,73 +24,6 @@ interface BoardsCommandInput {
   // Seam: tests inject a fake so nothing touches the network (open.ts's
   // openUrl pattern).
   fetchImpl?: FetchLike;
-}
-
-interface ParsedArgs {
-  positional: string[];
-  token: string;
-}
-
-// Token precedence: --token flag > BOARD_TOKEN env. No token-file plumbing —
-// the existing mint path (`make token add <name>`) prints a token once and
-// the caller keeps it like the dogfood token.
-function parseArgs(argv: string[], maxPositional: number): ParsedArgs | string {
-  const positional: string[] = [];
-  let token: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--token") {
-      token = argv[i + 1];
-      i++;
-      continue;
-    }
-    if (arg?.startsWith("--token=")) {
-      token = arg.slice("--token=".length);
-      continue;
-    }
-    positional.push(arg);
-  }
-  if (positional.length > maxPositional) {
-    return `unexpected argument "${positional[maxPositional]}"`;
-  }
-  if (token === undefined || token.length === 0) {
-    const env = process.env.BOARD_TOKEN;
-    if (env !== undefined && env.trim().length > 0) {
-      token = env.trim();
-    }
-  }
-  if (token === undefined || token.length === 0) {
-    return "no token: pass --token <token> or set BOARD_TOKEN (mint one with: make token add cli)";
-  }
-  return { positional, token };
-}
-
-function bearer(token: string): Record<string, string> {
-  return { authorization: `Bearer ${token}` };
-}
-
-async function errorMessage(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { error?: { message?: string } };
-    return body.error?.message ?? res.statusText;
-  } catch {
-    return res.statusText;
-  }
-}
-
-// Same table style as `token list`: pad columns, trim the ragged right edge.
-function renderTable(header: string[], rows: string[][]): string[] {
-  const widths = header.map(
-    (label, i) =>
-      label.length +
-      rows.reduce((max, row) => Math.max(max, row[i].length - label.length), 0),
-  );
-  const render = (cells: string[]) =>
-    cells
-      .map((cell, i) => cell.padEnd(widths[i], " "))
-      .join("  ")
-      .trimEnd();
-  return [render(header), ...rows.map(render)];
 }
 
 async function runListCommand(

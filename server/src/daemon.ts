@@ -108,6 +108,8 @@ export function hostSecurityHeaders(): Record<string, string> {
 }
 
 export function originUrlFor(host: string, port: number): string {
+  // IPv6 needs brackets in a URL authority (`http://::1:7800` is unparseable);
+  // already-bracketed input passes through untouched.
   const hostname =
     host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return `http://${hostname}:${port}`;

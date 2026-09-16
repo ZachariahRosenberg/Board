@@ -10,6 +10,7 @@ import {
 } from "./commands/install.ts";
 import { runOpenCommand } from "./commands/open.ts";
 import { runServe } from "./commands/serve.ts";
+import { runStatusCommand } from "./commands/status.ts";
 import {
   type CommandIo,
   runTokenCommand,
@@ -30,9 +31,9 @@ commands:
   open [board id]      open the web UI in a browser (one-time token)
   export <id> [file]   save a board bundle as a zip (default <id>.zip)
   import <file>        recreate a board from a bundle under a fresh board id
-  status               (not yet implemented)
+  status <board id>    one board's health: status, version, unresolved comments
 
-REST commands (list/export/import) authenticate with --token <token> or
+REST commands (list/status/export/import) authenticate with --token <token> or
 BOARD_TOKEN; mint one with: make token add cli
 `;
 
@@ -114,14 +115,21 @@ export async function main(argv: string[]): Promise<number> {
     }
     case "list":
     case "export":
-    case "import": {
+    case "import":
+    case "status": {
       // REST against the live daemon — deliberately no local db here: import
       // is a write and every write goes through the daemon API (invariant 3).
-      return await runBoardsCommand(command, {
-        config: loadConfig(),
-        argv: rest,
-        io: consoleIo(),
-      });
+      return await (command === "status"
+        ? runStatusCommand({
+            config: loadConfig(),
+            argv: rest,
+            io: consoleIo(),
+          })
+        : runBoardsCommand(command, {
+            config: loadConfig(),
+            argv: rest,
+            io: consoleIo(),
+          }));
     }
     default:
       console.error(`board: unknown command "${command}"`);

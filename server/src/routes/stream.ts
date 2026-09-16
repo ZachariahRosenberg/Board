@@ -1,9 +1,7 @@
-import { resolveRequestToken } from "../auth.ts";
+import { resolveActor, resolveRequestToken } from "../auth.ts";
 import type { Actor, BoardEvent } from "../domain.ts";
 import { getEvents, onEvent } from "../events.ts";
 import { HttpError } from "../http.ts";
-import { verifySessionToken } from "../sessions.ts";
-import { verifyToken } from "../tokens.ts";
 import { asNonNegativeIntString } from "../validate.ts";
 import type { RequestContext, Route } from "./route.ts";
 
@@ -19,20 +17,20 @@ function frame(ev: BoardEvent): string {
 }
 
 // EventSource cannot set Authorization headers — the ?token= query param is
-// the sanctioned fallback (docs/security.md session model); header preferred.
+// the sanctioned fallback (D13; docs/security.md session model); header
+// preferred. Agent-or-human on purpose: the browser's own session token is
+// what authenticates the page's live stream — the shared resolveActor passes
+// through unfiltered (unlike the MCP endpoint, which rejects human actors).
 function resolveStreamActor(req: Request, db: RequestContext["db"]): Actor {
   const token = resolveRequestToken(req);
   if (token === null || token.length === 0) {
     throw new HttpError(401, "unauthorized", "missing bearer token");
   }
-  const info = verifyToken(db, token);
-  if (info !== null) {
-    return { kind: "agent", name: info.name };
+  const actor = resolveActor(db, token);
+  if (actor === null) {
+    throw new HttpError(401, "unauthorized", "invalid or revoked token");
   }
-  if (verifySessionToken(db, token)) {
-    return { kind: "human", name: "human" };
-  }
-  throw new HttpError(401, "unauthorized", "invalid or revoked token");
+  return actor;
 }
 
 async function streamHandler(

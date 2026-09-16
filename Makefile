@@ -22,7 +22,6 @@ serve:
 	bun run server/src/main.ts
 
 # daemon + vite dev server concurrently; kill 0 makes Ctrl-C take both down.
-# daemon-only (with a note) until the web workspace lands.
 dev:
 	@trap 'kill 0' INT TERM; \
 	bun --watch server/src/main.ts & \

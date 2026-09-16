@@ -1,4 +1,6 @@
 import { Window } from "happy-dom";
+import { act, type ReactElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 
 // Minimal EventSource test double: BoardStream only needs addEventListener +
 // close, and tests need to fire frames and inspect instances.
@@ -69,4 +71,33 @@ export function installDom(): Window {
     EventSource: StubEventSource as unknown as typeof EventSource,
   });
   return window;
+}
+
+// Shared component-test harness: render into a fresh document container and
+// unmount everything on cleanup. Each test file calls this at its top level
+// and wires its own `afterEach(cleanup)` — hook registration must stay
+// file-local, so the harness only owns the roots and the render/unmount pair.
+export function createComponentHarness(): {
+  render: (element: ReactElement) => HTMLElement;
+  cleanup: () => Promise<void>;
+} {
+  const roots: Root[] = [];
+  const render = (element: ReactElement): HTMLElement => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => {
+      root.render(element);
+    });
+    return container;
+  };
+  const cleanup = async (): Promise<void> => {
+    for (const root of roots.splice(0)) {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  };
+  return { render, cleanup };
 }

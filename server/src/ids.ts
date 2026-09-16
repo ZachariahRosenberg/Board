@@ -16,7 +16,8 @@ export function shortId(length = SHORT_ID_LENGTH): string {
   return id;
 }
 
-export type IdExists = (id: string) => boolean;
+// only used in-module by newId's exists seam
+type IdExists = (id: string) => boolean;
 
 const MAX_RETRIES = 5;
 

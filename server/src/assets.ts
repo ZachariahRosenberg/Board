@@ -17,7 +17,7 @@ import type { Asset, AssetSource } from "./domain.ts";
 import { appendEventDb, mirrorEventFiles } from "./events.ts";
 import { newId } from "./ids.ts";
 import { sanitizeSvgDocument } from "./render.ts";
-import { BoardEnded, BoardNotFound, getBoard, StoreError } from "./store.ts";
+import { requireOpenBoard, StoreError } from "./store.ts";
 
 // Caps (docs/plan.md REST API): 10 MB per asset, 8 MB total per board. The
 // plan's own numbers make the per-board total the effective binding cap — a
@@ -162,18 +162,6 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
     }
   }
   return null;
-}
-
-function requireOpenBoard(db: Database, boardId: string) {
-  const board = getBoard(db, boardId);
-  if (board === null) {
-    throw new BoardNotFound(boardId);
-  }
-  if (board.status !== "open") {
-    // writes are rejected on ended boards — assets are writes (docs/plan.md)
-    throw new BoardEnded(boardId);
-  }
-  return board;
 }
 
 function boardAssetBytes(db: Database, boardId: string): number {

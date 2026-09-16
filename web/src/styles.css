@@ -640,8 +640,12 @@ body {
   cursor: zoom-in;
 }
 
-/* the overlay editor modal (hand-rolled, no dependency) */
-.overlay-editor-backdrop {
+/* Shared modal chrome (hand-rolled, no dependency): one fixed-backdrop +
+   themed-dialog pair. The overlay editor and the image lightbox compose it
+   in markup — class="modal-backdrop <semantic>-backdrop" /
+   class="modal <semantic>" — where the semantic classes remain as
+   component-specific hooks (was block-for-block duplicates). */
+.modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 40;
@@ -651,7 +655,7 @@ body {
   justify-content: center;
 }
 
-.overlay-editor {
+.modal {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -717,30 +721,9 @@ body {
   min-width: 120px;
 }
 
-/* the image lightbox (click-to-review on board images + thread thumbnails) —
-   shares the overlay editor's modal look (theme vars, same backdrop) */
-.lightbox-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: rgb(0 0 0 / 45%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.lightbox {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-  max-width: min(90vw, 900px);
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
+/* the image lightbox (click-to-review on board images + thread thumbnails)
+   — composes the shared modal chrome via its .lightbox-backdrop/.lightbox
+   classes in markup; only its own pieces are styled here */
 .lightbox-toolbar {
   display: flex;
   gap: 8px;

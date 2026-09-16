@@ -10,13 +10,12 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ingestAssetFromPath } from "./assets.ts";
-import { resolveRequestToken } from "./auth.ts";
+import { resolveActor, resolveRequestToken } from "./auth.ts";
 import { buildBundle } from "./bundle.ts";
 import {
+  boardsWithCounts,
   countUnresolvedRoots,
-  listComments,
-  maxCommentSeq,
-  recordCursorPresence,
+  listCommentsPage,
   replyComment,
   resolveComment,
 } from "./comments.ts";
@@ -35,10 +34,11 @@ import {
   StoreError,
   VersionConflict,
 } from "./store.ts";
-import { verifyToken } from "./tokens.ts";
 import { subscribeWebhook } from "./webhooks.ts";
 
 const MCP_SERVER_NAME = "board";
+// Consumed by the SDK handshake: it rides the initialize response's
+// serverInfo.version (clients read it as getServerVersion()).
 const MCP_SERVER_VERSION = "0.7.0";
 
 // MCP export carries the zip base64-encoded through JSON (≈ ×4/3 inflation).
@@ -54,17 +54,20 @@ interface McpContext {
 }
 
 // Agent-only surface (D16): browser sessions are valid credentials elsewhere
-// but never here (docs/security.md — the MCP endpoint is not a browser surface).
+// but never here (docs/security.md — the MCP endpoint is not a browser
+// surface). Wraps the shared resolveActor and rejects the human kind —
+// agent tokens only, header or ?token= (D13's EventSource rationale applies
+// to MCP tooling too).
 export function requireMcpActor(req: Request, db: Database): Actor {
   const token = resolveRequestToken(req);
   if (token === null || token.length === 0) {
     throw new HttpError(401, "unauthorized", "missing bearer token");
   }
-  const info = verifyToken(db, token);
-  if (info === null) {
+  const actor = resolveActor(db, token);
+  if (actor === null || actor.kind === "human") {
     throw new HttpError(401, "unauthorized", "invalid or revoked token");
   }
-  return { kind: "agent", name: info.name };
+  return actor;
 }
 
 function textResult(payload: unknown): CallToolResult {
@@ -197,13 +200,9 @@ function registerBoardTools(
       },
     },
     ({ status, tag, author }) =>
-      run(() => {
-        const boards = listBoards(db).map((board) => ({
-          ...board,
-          unresolved_comments: countUnresolvedRoots(db, board.id),
-        }));
-        return textResult(filterBoards(boards, { status, tag, author }));
-      }),
+      run(() =>
+        textResult(filterBoards(boardsWithCounts(db), { status, tag, author })),
+      ),
   );
 
   server.registerTool(
@@ -230,17 +229,7 @@ function registerBoardTools(
       },
     },
     ({ board_id, since }) =>
-      run(() => {
-        requireBoard(db, board_id);
-        recordCursorPresence(db, board_id, actor);
-        const comments = listComments(db, board_id, since);
-        const lastSeq = maxCommentSeq(db, board_id);
-        return textResult({
-          comments,
-          last_seq:
-            comments.length > 0 ? (comments.at(-1)?.seq ?? lastSeq) : lastSeq,
-        });
-      }),
+      run(() => textResult(listCommentsPage(db, board_id, actor, since))),
   );
 
   server.registerTool(

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ingestAsset } from "./assets.ts";
 import {
+  boardsWithCounts,
   CommentBodyRequired,
   CommentNotFound,
   countUnresolvedRoots,
@@ -12,6 +13,7 @@ import {
   getComment,
   InvalidAnchor,
   listComments,
+  listCommentsPage,
   maxCommentSeq,
   replyComment,
   resolveComment,
@@ -657,6 +659,107 @@ describe("queries", () => {
       actor: "human",
     });
     expect(getComment(db, comment.id)?.anchor).toEqual(anchor);
+  });
+});
+
+// The shared cursor read behind REST GET /boards/:id/comments and MCP
+// board_get_comments (the M7 audit view is the planned third consumer).
+describe("listCommentsPage", () => {
+  test("returns the page plus a last_seq cursor matching the newest seq", async () => {
+    const board = createBoard(db, dataDir, {
+      title: "Page",
+      format: "markdown",
+      actor: "human",
+    });
+    await publishVersion(db, dataDir, board.id, {
+      format: "markdown",
+      content: "# page",
+      expected_version: 0,
+      actor: "human",
+    });
+    const empty = listCommentsPage(db, board.id, undefined);
+    expect(empty.comments).toEqual([]);
+    expect(empty.last_seq).toBe(0);
+
+    const c1 = createComment(db, dataDir, board.id, {
+      anchor: { type: "board" },
+      body: "one",
+      version_n: 1,
+      actor: "human",
+    });
+    const c2 = createComment(db, dataDir, board.id, {
+      anchor: { type: "board" },
+      body: "two",
+      version_n: 1,
+      actor: "human",
+    });
+    const page = listCommentsPage(db, board.id, undefined);
+    expect(page.comments.map((c) => c.id)).toEqual([c1.id, c2.id]);
+    expect(page.last_seq).toBe(c2.seq);
+
+    // since is exclusive — the cursor page starts after it
+    const tail = listCommentsPage(db, board.id, undefined, c1.seq);
+    expect(tail.comments.map((c) => c.id)).toEqual([c2.id]);
+  });
+
+  test("an agent poll records cursor presence; a human poll does not", () => {
+    const board = createBoard(db, dataDir, {
+      title: "Presence",
+      format: "markdown",
+      actor: "human",
+    });
+    listCommentsPage(db, board.id, { kind: "human", name: "human" });
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS c FROM subscribers WHERE board_id = ?")
+        .get(board.id) as { c: number },
+    ).toEqual({ c: 0 });
+    listCommentsPage(db, board.id, { kind: "agent", name: "agent-1" });
+    const row = db
+      .prepare("SELECT agent, kind FROM subscribers WHERE board_id = ?")
+      .get(board.id) as { agent: string; kind: string };
+    expect(row).toEqual({ agent: "agent-1", kind: "cursor" });
+  });
+
+  test("an unknown board throws BoardNotFound", () => {
+    expect(() => listCommentsPage(db, "nosuchboard", undefined)).toThrow(
+      BoardNotFound,
+    );
+  });
+});
+
+describe("boardsWithCounts", () => {
+  test("attaches unresolved root-comment counts to every board", async () => {
+    const board = createBoard(db, dataDir, {
+      title: "Counts",
+      format: "markdown",
+      actor: "human",
+    });
+    await publishVersion(db, dataDir, board.id, {
+      format: "markdown",
+      content: "# counts",
+      expected_version: 0,
+      actor: "human",
+    });
+    const listed = boardsWithCounts(db);
+    const counted = listed.find((b) => b.id === board.id);
+    expect(counted?.unresolved_comments).toBe(0);
+    const root = createComment(db, dataDir, board.id, {
+      anchor: { type: "board" },
+      body: "unresolved",
+      version_n: 1,
+      actor: "human",
+    });
+    createComment(db, dataDir, board.id, {
+      anchor: { type: "board" },
+      body: "reply, not a root",
+      version_n: 1,
+      in_reply_to: root.id,
+      actor: "human",
+    });
+    expect(
+      boardsWithCounts(db).find((b) => b.id === board.id)?.unresolved_comments,
+    ).toBe(1);
   });
 });
 

@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import type { ImageOverlay } from "../../../server/src/domain.ts";
-import { installDom } from "../test-dom.ts";
+import { createComponentHarness, installDom } from "../test-dom.ts";
 import { ImageOverlayEditor } from "./ImageOverlayEditor.tsx";
 
 installDom();
@@ -16,26 +15,8 @@ function mouse(type: string, clientX: number, clientY: number): Event {
   return new window.MouseEvent(type, { bubbles: true, clientX, clientY });
 }
 
-const roots: Root[] = [];
-
-function render(element: React.ReactElement): HTMLElement {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
-  roots.push(root);
-  act(() => {
-    root.render(element);
-  });
-  return container;
-}
-
-afterEach(async () => {
-  for (const root of roots.splice(0)) {
-    await act(async () => {
-      root.unmount();
-    });
-  }
-});
+const { render, cleanup } = createComponentHarness();
+afterEach(cleanup);
 
 function openEditor(done: (overlay: ImageOverlay) => void, cancel: () => void) {
   const container = render(

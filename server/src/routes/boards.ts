@@ -1,5 +1,5 @@
 import { buildBundle, importBoard, readImportBody } from "../bundle.ts";
-import { countUnresolvedRoots } from "../comments.ts";
+import { boardsWithCounts } from "../comments.ts";
 import type { Board, BoardStatus } from "../domain.ts";
 import { HttpError, jsonOk } from "../http.ts";
 import {
@@ -8,7 +8,6 @@ import {
   endBoard,
   getBoard,
   getVersion,
-  listBoards,
   listVersions,
   publishVersion,
   restoreVersion,
@@ -22,31 +21,15 @@ import {
   asString,
   asStringArray,
 } from "../validate.ts";
-import type { RequestContext, Route } from "./route.ts";
+import {
+  actorName,
+  bodyFields,
+  type RequestContext,
+  type Route,
+} from "./route.ts";
 
 const BOARD_FORMATS = ["markdown", "html"] as const;
 const BOARD_STATUSES = ["open", "ended"] as const;
-
-// Authed routes always get an actor from the daemon; this guard only fires on
-// a route-table misconfiguration.
-function actorName(ctx: RequestContext): string {
-  if (ctx.actor === undefined) {
-    throw new HttpError(
-      500,
-      "internal_error",
-      "authenticated route ran without an actor",
-    );
-  }
-  return ctx.actor.name;
-}
-
-// Non-object bodies read as {} so field validators reject them with the
-// missing field name (e.g. "title must be a string") instead of crashing.
-function bodyFields(ctx: RequestContext): Record<string, unknown> {
-  return typeof ctx.body === "object" && ctx.body !== null
-    ? (ctx.body as Record<string, unknown>)
-    : {};
-}
 
 interface BoardFilters {
   status?: BoardStatus;
@@ -67,7 +50,7 @@ export function filterBoards<T extends Board>(
 }
 
 function createBoardHandler(_req: Request, ctx: RequestContext): Response {
-  const body = bodyFields(ctx);
+  const body = bodyFields(ctx.body);
   const board = createBoard(ctx.db, ctx.dataDir, {
     title: asString(body.title, "title"),
     format: asEnum(body.format, "format", BOARD_FORMATS),
@@ -90,11 +73,7 @@ function listBoardsHandler(req: Request, ctx: RequestContext): Response {
     author: author === null ? undefined : asString(author, "author"),
   };
   // unresolved root-thread counts ride along on the list (docs/plan.md REST API)
-  const boards = listBoards(ctx.db).map((board) => ({
-    ...board,
-    unresolved_comments: countUnresolvedRoots(ctx.db, board.id),
-  }));
-  return jsonOk(filterBoards(boards, filters));
+  return jsonOk(filterBoards(boardsWithCounts(ctx.db), filters));
 }
 
 function getBoardHandler(_req: Request, ctx: RequestContext): Response {
@@ -129,7 +108,7 @@ async function publishHandler(
   _req: Request,
   ctx: RequestContext,
 ): Promise<Response> {
-  const body = bodyFields(ctx);
+  const body = bodyFields(ctx.body);
   const version = await publishVersion(ctx.db, ctx.dataDir, ctx.params.id, {
     format: asEnum(body.format, "format", BOARD_FORMATS),
     content: asString(body.content, "content"),
@@ -150,7 +129,7 @@ async function restoreHandler(
   _req: Request,
   ctx: RequestContext,
 ): Promise<Response> {
-  const body = bodyFields(ctx);
+  const body = bodyFields(ctx.body);
   const version = await restoreVersion(ctx.db, ctx.dataDir, ctx.params.id, {
     from_n: asInt(body.from_n, "from_n"),
     expected_version: asInt(body.expected_version, "expected_version"),
