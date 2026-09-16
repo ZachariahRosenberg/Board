@@ -21,7 +21,7 @@ import {
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { buildBundle } from "../../server/src/bundle.ts";
 import { openDb } from "../../server/src/db.ts";
 import { shortId } from "../../server/src/ids.ts";
@@ -30,6 +30,11 @@ import { createToken } from "../../server/src/tokens.ts";
 
 const POLL_MS = 100;
 const READY_TIMEOUT_MS = 10_000;
+// F3 (audit): a booting entry younger than this may still be mid-boot in
+// another shell's `up` — the listen wait and the health wait can each burn
+// the full ready timeout (hence 2x), plus slack for poll granularity. Younger
+// booting entries are never reaped; older ones are SIGKILL orphans.
+export const BOOT_GRACE_MS = 2 * READY_TIMEOUT_MS + 30_000;
 // D20 teardown contract: SIGTERM, then ≤8s of liveness polling, then SIGKILL.
 const TERM_GRACE_MS = 8_000;
 const KILL_GRACE_MS = 2_000;
@@ -37,14 +42,27 @@ const KILL_GRACE_MS = 2_000;
 export interface InstanceEntry {
   id: string;
   pid: number;
-  port: number;
-  url: string;
+  // port/url are absent on the pre-readiness (booting) entry written by the
+  // F3 boot-window guard — they exist only once the daemon is confirmed ready
+  port?: number;
+  url?: string;
   dataDir: string;
   agentTokenName: string;
   createdAt: string;
   closedAt?: string;
   // board ids kept as zips under <registry>/boards/ — stamped at teardown
   boards?: string[];
+  // set ONLY on the minimal entry written before readiness completes (F3);
+  // the full entry overwrites it atomically on success
+  booting?: true;
+}
+
+// The COMPLETE entry: written once readiness is confirmed (F3). spawnInstance
+// resolves to this shape, so callers (smoke.ts, runUp) keep non-optional
+// port/url without casts.
+export interface ReadyInstanceEntry extends InstanceEntry {
+  port: number;
+  url: string;
 }
 
 export interface InstancePaths {
@@ -72,6 +90,16 @@ export class InstanceSpawnError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InstanceSpawnError";
+  }
+}
+
+// F1 (audit): the registry entry fails the structural data-dir guard —
+// treated as corrupt: nothing is signalled, nothing purged; the human
+// inspects instance.json manually.
+export class CorruptEntryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CorruptEntryError";
   }
 }
 
@@ -117,9 +145,28 @@ function createRegistryDir(dataDir: string): {
 }
 
 // Only ids `up` could have minted are ever listed/pruned — a stray directory
-// under instances/ is reported, never recursed into or deleted.
-function plausibleId(id: string): boolean {
+// under instances/ is reported, never recursed into or deleted. Applied to
+// user-supplied ids too (down/--instance): a `../`-style id could otherwise
+// address files outside the registry. [D20; audit F1 guard 2]
+export function plausibleId(id: string): boolean {
   return /^s-[0-9A-Za-z]{10}$/.test(id);
+}
+
+// The mkdtemp prefix spawnInstance uses — the ONLY shape a session data dir
+// can have. Structural guard (audit F1): identity checks verify WHO a pid is;
+// this verifies WHAT the dataDir is. A crafted/corrupt instance.json can
+// falsify identity (any pid + any path), but not filesystem shape: only a
+// direct mkdtemp child of tmpdir() with this exact prefix is ever signalled
+// or purged, so `down` can never become a targeted `rm -rf` of an arbitrary
+// directory. [D20; audit F1 guard 1]
+const SESSION_DATA_PREFIX = "board-instance-";
+
+export function isSessionDataDir(dir: string): boolean {
+  const resolved = resolve(dir);
+  return (
+    dirname(resolved) === resolve(tmpdir()) &&
+    basename(resolved).startsWith(SESSION_DATA_PREFIX)
+  );
 }
 
 export interface RegistryEntry {
@@ -208,9 +255,9 @@ export function serverEntryPath(): string {
 const SERVER_ENTRY = "server/src/main.ts";
 
 // D20 pid-reuse defense, runs BEFORE any signal: the process must be a board
-// daemon (server entry on the cmdline) and — when its environment is readable,
-// i.e. same uid — must carry THIS instance's BOARD_DATA_DIR. A recycled pid
-// fails one of the two and is never signalled.
+// daemon (server entry on the cmdline) AND — its environment must be readable
+// (same uid) and carry THIS instance's BOARD_DATA_DIR. A recycled pid fails
+// one of the two and is never signalled.
 export function pidIdentity(pid: number, expectedDataDir: string): PidIdentity {
   let cmdline: string;
   try {
@@ -225,15 +272,18 @@ export function pidIdentity(pid: number, expectedDataDir: string): PidIdentity {
   if (!isDaemon) {
     return "foreign";
   }
+  let environ: string;
   try {
-    const environ = readFileSync(`/proc/${pid}/environ`, "utf8");
-    if (!environ.split("\0").includes(`BOARD_DATA_DIR=${expectedDataDir}`)) {
-      return "foreign";
-    }
+    environ = readFileSync(`/proc/${pid}/environ`, "utf8");
   } catch {
-    // environ unreadable (other uid) — the cmdline match stands alone
+    // N2 (audit): fail closed. down runs same-uid as up, so an UNREADABLE
+    // environ cannot be our instance; the old cmdline-only fallback let a
+    // recycled pid through on a weakened check. [D20]
+    return "foreign";
   }
-  return "ours";
+  return environ.split("\0").includes(`BOARD_DATA_DIR=${expectedDataDir}`)
+    ? "ours"
+    : "foreign";
 }
 
 // Narrow structural view of the spawned child: Bun's Subprocess generic
@@ -295,8 +345,29 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
   }
 }
 
+// F2 (adversarial audit): the inherited environ is scrubbed of EVERY BOARD_*
+// key before the daemon gets it. A sourced previous-session env file leaves
+// BOARD_TOKEN (live plaintext) and BOARD_INSTANCE in the shell that runs
+// `up`; spread verbatim, those land in the long-lived daemon's
+// /proc/<pid>/environ — readable by every same-uid process and preserved in
+// core dumps (D20 credential hygiene). The daemon reads no other BOARD_*
+// keys (server/src/config.ts's four + BOARD_SSE_HEARTBEAT_MS, which correctly
+// reverts to its documented default when absent — audit N5).
+function scrubbedChildEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined || key.startsWith("BOARD_")) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
 export interface SpawnedInstance {
-  entry: InstanceEntry;
+  // Always the COMPLETE entry — spawnInstance only returns after readiness,
+  // so port/url are present (the booting entry never escapes this function).
+  entry: ReadyInstanceEntry;
   token: string;
   // Plaintexts for extraAgentTokenNames, positionally aligned. Same one-print
   // discipline as token: the caller surfaces them once, nothing but the env
@@ -322,12 +393,36 @@ export async function spawnInstance(
 ): Promise<SpawnedInstance> {
   const { id, paths } = createRegistryDir(opts.registryDataDir);
   // The daemon's data dir is ALWAYS OS-tmp (D20 safety boundary) — never
-  // under ~/.board, never derived from the environment.
+  // under ~/.board, never derived from the environment. The exact prefix is
+  // the F1 structural guard's shape contract (isSessionDataDir).
   const dataDir = mkdtempSync(join(tmpdir(), "board-instance-"));
   const readyMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS;
   let proc:
     | (DaemonProcess & { kill(signal?: number | NodeJS.Signals): void })
     | undefined;
+  // F3 (audit): SIGINT/SIGTERM during the boot window must not orphan the
+  // detached daemon — it would outlive the registry with no entry to manage
+  // and a token nobody can recover. The handlers run the same cleanup as the
+  // failure catch-path below (kill child, rm temp + registry dir), then exit
+  // non-zero; they are removed the moment the boot window ends (finally) so
+  // later Ctrl-C semantics are untouched.
+  const onBootSignal = (signal: NodeJS.Signals): void => {
+    void (async () => {
+      if (proc !== undefined) {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+        await proc.exited;
+      }
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(paths.dir, { recursive: true, force: true });
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    })();
+  };
+  process.on("SIGINT", onBootSignal);
+  process.on("SIGTERM", onBootSignal);
   // Parent-side copies of the log fds: the daemon dups them across spawn;
   // this process closes them again in the finally below.
   const logFds = [openSync(paths.log, "a"), openSync(paths.log, "a")];
@@ -344,13 +439,14 @@ export async function spawnInstance(
     );
     db.close();
 
-    // Env is PINNED over the inherited environ: a hostile BOARD_HOST=0.0.0.0
-    // or a widened BOARD_BIND from the agent's shell must never widen a
-    // session instance (invariant 1; D20 safety boundary). BOARD_PORT=0
-    // kernel-assigns the port so instances never collide on :7800.
+    // Env is scrubbed (F2 above) then PINNED over the inherited environ: a
+    // hostile BOARD_HOST=0.0.0.0 or a widened BOARD_BIND from the agent's
+    // shell must never widen a session instance (invariant 1; D20 safety
+    // boundary). BOARD_PORT=0 kernel-assigns the port so instances never
+    // collide on :7800.
     proc = Bun.spawn([process.execPath, serverEntryPath()], {
       env: {
-        ...process.env,
+        ...scrubbedChildEnv(),
         BOARD_DATA_DIR: dataDir,
         BOARD_PORT: "0",
         BOARD_HOST: "127.0.0.1",
@@ -368,16 +464,33 @@ export async function spawnInstance(
     // subprocesses by default; unref() is what makes the CLI exit.
     proc.unref();
 
+    // F3 SIGKILL backstop: the registry entry lands BEFORE the readiness
+    // wait, so a SIGKILLed `up` leaves a manageable booting entry (pid +
+    // dataDir true for pidIdentity) instead of an unmanageable orphan
+    // daemon. The full entry overwrites this atomically on success.
+    // Accepted residue: a SIGKILL between the registry mkdir and this write
+    // (~ms) leaves an unreadable registry dir — prune already reports those
+    // and never auto-removes. [D20; audit F3]
+    const createdAt = new Date().toISOString();
+    writeInstanceEntry(paths, {
+      id,
+      pid: proc.pid,
+      dataDir,
+      agentTokenName: opts.agentTokenName,
+      createdAt,
+      booting: true,
+    });
+
     const url = await waitForListenLine(paths.log, proc, readyMs);
     await waitForHealth(url, readyMs);
-    const entry: InstanceEntry = {
+    const entry: ReadyInstanceEntry = {
       id,
       pid: proc.pid,
       port: Number(new URL(url).port),
       url,
       dataDir,
       agentTokenName: opts.agentTokenName,
-      createdAt: new Date().toISOString(),
+      createdAt,
     };
     writeInstanceEntry(paths, entry);
     writeEnvFile(paths, { id, port: entry.port, token });
@@ -398,6 +511,10 @@ export async function spawnInstance(
     rmSync(paths.dir, { recursive: true, force: true });
     throw err;
   } finally {
+    // Boot window over: restore default signal semantics for the rest of the
+    // CLI's lifetime (printing, publishing, opener).
+    process.off("SIGINT", onBootSignal);
+    process.off("SIGTERM", onBootSignal);
     closeSync(logFds[0]);
     closeSync(logFds[1]);
   }
@@ -424,6 +541,18 @@ export async function teardownInstance(
   opts: TeardownOptions = {},
 ): Promise<TeardownResult> {
   const notice = opts.notice ?? (() => {});
+  // F1 structural guard (audit): identity checks verify WHO the pid is, but a
+  // crafted/corrupt instance.json falsifies identity — dataDir=<victim> plus
+  // a pid that happens to be a live daemon on it would turn `down` into a
+  // targeted SIGTERM + rm -rf of an arbitrary directory. The filesystem shape
+  // (OS-tmp board-instance-* dir) cannot be forged by registry contents, so
+  // it is checked first: corrupt ⇒ error, nothing signalled, nothing purged.
+  // [D20; audit F1]
+  if (!isSessionDataDir(entry.dataDir)) {
+    throw new CorruptEntryError(
+      `instance "${entry.id}" has a corrupt entry: dataDir "${entry.dataDir}" is not a session instance dir (${resolve(tmpdir())}/${SESSION_DATA_PREFIX}*) — nothing was signalled or purged; inspect ${paths.json} manually`,
+    );
+  }
   const identity = pidIdentity(entry.pid, entry.dataDir);
   if (identity === "foreign") {
     throw new PidForeignError(entry.pid);
@@ -433,7 +562,9 @@ export async function teardownInstance(
   const kept: string[] = [];
 
   let restExported: string[] = [];
-  if (wasAlive) {
+  // url is absent on a booting entry (F3): its daemon is mid-boot and no env
+  // file exists yet, so the REST path is impossible by construction.
+  if (wasAlive && entry.url !== undefined) {
     const token = readEnvToken(paths);
     if (token === null) {
       // The env file is the only credential source down has; without it the
@@ -609,6 +740,20 @@ export async function signalDaemon(
   pid: number,
   dataDir: string,
 ): Promise<void> {
+  // N1 (audit): the caller verified identity, then spent seconds in REST
+  // end/export before reaching this signal — a pid recycled in between would
+  // eat a stray SIGTERM. Re-verify immediately before the first signal: the
+  // TOCTOU window shrinks from seconds to µs.
+  const identity = pidIdentity(pid, dataDir);
+  if (identity === "foreign") {
+    throw new PidForeignError(pid);
+  }
+  if (identity === "gone") {
+    // Died on its own since the caller's check — nothing to signal; the
+    // caller's data-dir purge remains valid (the F1 structural guard already
+    // vetted the dir shape).
+    return;
+  }
   try {
     process.kill(pid, "SIGTERM");
   } catch {
@@ -658,6 +803,8 @@ export function countBoardsOnDisk(dataDir: string): number {
 // `up` self-heals and `instances --prune` cleans: a stale entry (dead pid)
 // gets the exact down-on-dead treatment — keepsakes from disk, temp purge,
 // env purge, closedAt stamp. Foreign-pid entries are left untouched.
+// F1 (audit): a corrupt dataDir is REPORTED and skipped — prune never
+// signals or purges on an unverified shape, and never auto-removes.
 export async function pruneStaleInstances(
   dataDir: string,
   notice: (message: string) => void = () => {},
@@ -667,11 +814,30 @@ export async function pruneStaleInstances(
     if (entry === null || entry.closedAt !== undefined) {
       continue;
     }
-    if (pidIdentity(entry.pid, entry.dataDir) !== "gone") {
+    if (!isSessionDataDir(entry.dataDir)) {
+      notice(
+        `instance "${entry.id}" has a corrupt entry (dataDir "${entry.dataDir}" is not a session instance dir) — left untouched; inspect ${paths.json} manually`,
+      );
       continue;
     }
-    await teardownInstance(entry, paths, { notice });
-    pruned.push(entry.id);
+    if (entry.booting === true) {
+      // F3: young booting entries belong to a possibly still-running `up` —
+      // never reaped. Past the grace they are SIGKILL orphans: reap whether
+      // the pid is alive (ours — signalled) or gone.
+      if (Date.now() - Date.parse(entry.createdAt) < BOOT_GRACE_MS) {
+        continue;
+      }
+    } else if (pidIdentity(entry.pid, entry.dataDir) !== "gone") {
+      continue;
+    }
+    try {
+      await teardownInstance(entry, paths, { notice });
+      pruned.push(entry.id);
+    } catch (err) {
+      // One bad entry (e.g. a foreign pid on an old booting orphan) must not
+      // abort the whole sweep — and `up`'s self-heal must not crash (N4).
+      notice(`instance "${entry.id}" could not be pruned: ${errText(err)}`);
+    }
   }
   return pruned;
 }

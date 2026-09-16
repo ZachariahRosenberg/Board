@@ -17,7 +17,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startTestServer } from "../../server/test/helpers.ts";
-import { instancePaths, writeInstanceEntry } from "./instances.ts";
+import {
+  instancePaths,
+  instancesRoot,
+  readInstanceEntry,
+  writeInstanceEntry,
+} from "./instances.ts";
 
 const dirs: string[] = [];
 const spawned: Array<{ pid: number; dataDir: string }> = [];
@@ -137,6 +142,29 @@ async function expectRefused(url: string): Promise<void> {
 
 const V1_MD =
   "# Decision log\n\n## Rollout order\n\nThe rollout must wait for the migration to finish.\n";
+
+// F3 tests: the pre-readiness (booting) registry entry is the signal to kill
+// `up` against — poll the registry until it appears (written right after the
+// daemon spawn, ~the whole boot before readiness).
+async function awaitBootingEntry(
+  dataDir: string,
+  timeoutMs = 15_000,
+): Promise<{ id: string; pid: number; dataDir: string; url?: string }> {
+  const deadline = Date.now() + timeoutMs;
+  const root = instancesRoot(dataDir);
+  while (Date.now() < deadline) {
+    if (existsSync(root)) {
+      for (const id of readdirSync(root)) {
+        const entry = readInstanceEntry(instancePaths(dataDir, id));
+        if (entry?.booting === true) {
+          return { id: entry.id, pid: entry.pid, dataDir: entry.dataDir };
+        }
+      }
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(`no booting entry appeared in ${root} within ${timeoutMs}ms`);
+}
 
 describe("board up", () => {
   test("contract 1: bare up — health, port, registry hygiene", async () => {
@@ -335,6 +363,37 @@ describe("board up", () => {
     // sanity: the token is real — the env file carries it
     expect(readFileSync(paths.env, "utf8")).toContain(up.token);
   }, 30_000);
+
+  test("contract 10: ambient BOARD_* env is scrubbed from the daemon (audit F2/N5)", async () => {
+    const dir = freshDir();
+    // a sourced previous-session env file leaves exactly these in the shell
+    // that runs `up` — none may reach the daemon's /proc/<pid>/environ
+    const res = await runCli(["up"], {
+      BOARD_DATA_DIR: dir,
+      BOARD_TOKEN: "sentinel-plain-token",
+      BOARD_INSTANCE: "s-sentinel00",
+      BOARD_SSE_HEARTBEAT_MS: "0",
+    });
+    expect(res.exitCode).toBe(0);
+    const up = parseUp(res.stdout);
+    trackInstance(dir, up);
+    const entry = JSON.parse(
+      readFileSync(instancePaths(dir, up.id).json, "utf8"),
+    ) as { pid: number; dataDir: string };
+    const environ = readFileSync(`/proc/${entry.pid}/environ`, "utf8").split(
+      "\0",
+    );
+    // sentinels ABSENT: the live plaintext token never lands in an environ
+    expect(environ).not.toContain("BOARD_TOKEN=sentinel-plain-token");
+    expect(environ).not.toContain("BOARD_INSTANCE=s-sentinel00");
+    // N5: the stripped heartbeat var reverts to the documented default
+    expect(environ).not.toContain("BOARD_SSE_HEARTBEAT_MS=0");
+    // the pinned four are exactly what the spawner overlays
+    expect(environ).toContain(`BOARD_DATA_DIR=${entry.dataDir}`);
+    expect(environ).toContain("BOARD_PORT=0");
+    expect(environ).toContain("BOARD_HOST=127.0.0.1");
+    expect(environ).toContain("BOARD_BIND=127.0.0.1");
+  }, 30_000);
 });
 
 describe("board down", () => {
@@ -444,8 +503,10 @@ describe("board down", () => {
       const id = "s-spoofedid0";
       const paths = instancePaths(dir, id);
       mkdirSync(paths.dir, { recursive: true });
-      // a registry entry whose pid is a live non-board process
-      const spoofDataDir = mkdtempSync(join(tmpdir(), "board-spoof-data-"));
+      // a registry entry whose pid is a live non-board process; the dataDir
+      // must be a structurally valid session dir so the F1 shape guard
+      // passes and the PID-identity refusal is what fires here
+      const spoofDataDir = mkdtempSync(join(tmpdir(), "board-instance-"));
       dirs.push(spoofDataDir); // the foreign-pid refusal must not leak it
       writeInstanceEntry(paths, {
         id,
@@ -470,6 +531,91 @@ describe("board down", () => {
       await decoy.exited;
     }
   }, 30_000);
+
+  test("contract 11: corrupt dataDir — down refuses to signal or purge a live daemon (audit F1)", async () => {
+    const dir = freshDir();
+    // the audit's live repro: a REAL board daemon on a data dir that is NOT
+    // a session temp dir, plus a crafted entry pointing `down` at it —
+    // without the structural guard this SIGTERMs the victim and purges it
+    const victim = mkdtempSync(join(tmpdir(), "board-victim-"));
+    dirs.push(victim);
+    const decoy = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "..", "..", "server", "src", "main.ts"),
+      ],
+      {
+        env: { BOARD_DATA_DIR: victim, BOARD_PORT: "0" },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      },
+    );
+    spawned.push({ pid: decoy.pid, dataDir: victim });
+    expect(existsSync(`/proc/${decoy.pid}`)).toBe(true); // alive pre-down
+
+    const id = "s-decoyed000";
+    const paths = instancePaths(dir, id);
+    mkdirSync(paths.dir, { recursive: true });
+    writeInstanceEntry(paths, {
+      id,
+      pid: decoy.pid,
+      port: 1,
+      url: "http://127.0.0.1:1",
+      dataDir: victim,
+      agentTokenName: "session",
+      createdAt: new Date().toISOString(),
+    });
+
+    const down = await runCli(["down", id], { BOARD_DATA_DIR: dir });
+    expect(down.exitCode).toBe(1);
+    expect(down.stderr).toContain(id);
+    expect(down.stderr).toContain("corrupt");
+    // decoy alive, victim dir intact, entry not stamped closed
+    expect(existsSync(`/proc/${decoy.pid}`)).toBe(true);
+    expect(existsSync(victim)).toBe(true);
+    const entry = readInstanceEntry(paths);
+    expect(entry?.closedAt).toBeUndefined();
+  }, 30_000);
+
+  test("contract 12: corrupt dataDir + dead pid — down and up-prune both refuse (audit F1)", async () => {
+    const dir = freshDir();
+    const dead = Bun.spawn(["true"]);
+    await dead.exited;
+    // sentinel NON-tmp dir: a purge that ignored the guard would eat this
+    const sentinel = join(dir, "victim-data");
+    mkdirSync(sentinel);
+    writeFileSync(join(sentinel, "keep-me.txt"), "do not delete");
+
+    const id = "s-stalepid00";
+    const paths = instancePaths(dir, id);
+    mkdirSync(paths.dir, { recursive: true });
+    writeInstanceEntry(paths, {
+      id,
+      pid: dead.pid,
+      port: 1,
+      url: "http://127.0.0.1:1",
+      dataDir: sentinel,
+      agentTokenName: "session",
+      createdAt: new Date().toISOString(),
+    });
+
+    // down refuses: the dead-pid path used to purge with NO identity check
+    const down = await runCli(["down", id], { BOARD_DATA_DIR: dir });
+    expect(down.exitCode).toBe(1);
+    expect(down.stderr).toContain(id);
+    expect(down.stderr).toContain("corrupt");
+    expect(existsSync(join(sentinel, "keep-me.txt"))).toBe(true);
+
+    // up's self-heal prune REPORTS the corrupt entry and moves on (no
+    // auto-action), then spawns normally
+    const up = await runCli(["up"], { BOARD_DATA_DIR: dir });
+    expect(up.exitCode).toBe(0);
+    expect(up.stderr).toContain(id);
+    expect(up.stderr).toContain("corrupt");
+    trackInstance(dir, parseUp(up.stdout));
+    expect(existsSync(join(sentinel, "keep-me.txt"))).toBe(true);
+  }, 60_000);
 });
 
 describe("board instances / prune", () => {
@@ -518,5 +664,131 @@ describe("board instances / prune", () => {
     expect(all.stdout).toContain(up.id);
     expect(all.stdout).toContain("closed");
     expect(all.stdout).toContain(up2out.id);
+  }, 60_000);
+
+  test("contract 15: prune spares a young booting entry, reaps an old orphan (audit F3)", async () => {
+    const dir = freshDir();
+    const dead = Bun.spawn(["true"]);
+    await dead.exited;
+
+    // young booting entry with an already-dead pid: ONLY the boot-age guard
+    // protects it (another shell's up may still be mid-boot)
+    const youngDir = mkdtempSync(join(tmpdir(), "board-instance-"));
+    dirs.push(youngDir);
+    const youngId = "s-youngboot0";
+    mkdirSync(instancePaths(dir, youngId).dir, { recursive: true });
+    writeInstanceEntry(instancePaths(dir, youngId), {
+      id: youngId,
+      pid: dead.pid,
+      dataDir: youngDir,
+      agentTokenName: "session",
+      createdAt: new Date().toISOString(),
+      booting: true,
+    });
+    const list = await runCli(["instances"], { BOARD_DATA_DIR: dir });
+    expect(list.exitCode).toBe(0);
+    expect(list.stdout).toContain(youngId);
+    expect(list.stdout).toContain("booting");
+    const prune = await runCli(["instances", "--prune"], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(prune.exitCode).toBe(0);
+    expect(existsSync(youngDir)).toBe(true);
+    const young = readInstanceEntry(instancePaths(dir, youngId));
+    expect(young?.closedAt).toBeUndefined();
+
+    // the same shape, aged past the boot grace: reaped as a SIGKILL orphan
+    const oldDir = mkdtempSync(join(tmpdir(), "board-instance-"));
+    const oldId = "s-oldboot000";
+    mkdirSync(instancePaths(dir, oldId).dir, { recursive: true });
+    writeInstanceEntry(instancePaths(dir, oldId), {
+      id: oldId,
+      pid: dead.pid,
+      dataDir: oldDir,
+      agentTokenName: "session",
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      booting: true,
+    });
+    const prune2 = await runCli(["instances", "--prune"], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(prune2.exitCode).toBe(0);
+    expect(existsSync(oldDir)).toBe(false);
+    const old = readInstanceEntry(instancePaths(dir, oldId));
+    expect(old?.closedAt).toBeDefined();
+  }, 30_000);
+});
+
+describe("boot-window orphaning (audit F3)", () => {
+  test("contract 13: SIGKILL mid-boot leaves a booting entry `down` can manage", async () => {
+    const dir = freshDir();
+    const up = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "main.ts"), "up"],
+      { env: { BOARD_DATA_DIR: dir }, stdout: "pipe", stderr: "pipe" },
+    );
+    const booting = await awaitBootingEntry(dir);
+    // track for afterAll in case an assert fails before down
+    spawned.push({ pid: booting.pid, dataDir: booting.dataDir });
+    // minimal pre-readiness shape: no port/url yet
+    expect(booting.url).toBeUndefined();
+    // the daemon is real and carries the instance's BOARD_DATA_DIR (the
+    // environ identity `down` will use)
+    const environ = readFileSync(`/proc/${booting.pid}/environ`, "utf8").split(
+      "\0",
+    );
+    expect(environ).toContain(`BOARD_DATA_DIR=${booting.dataDir}`);
+    up.kill("SIGKILL");
+    await up.exited;
+    // the entry survives the SIGKILL (the backstop)…
+    const stamped = readInstanceEntry(instancePaths(dir, booting.id));
+    expect(stamped?.booting).toBe(true);
+    // …and down manages it: kills the daemon, purges the temp dir, stamps closed
+    const down = await runCli(["down", booting.id], { BOARD_DATA_DIR: dir });
+    expect(down.exitCode).toBe(0);
+    await awaitGone(booting.pid);
+    expect(existsSync(booting.dataDir)).toBe(false);
+    const closed = readInstanceEntry(instancePaths(dir, booting.id));
+    expect(closed?.closedAt).toBeDefined();
+  }, 30_000);
+
+  test("contract 14: SIGTERM mid-boot cleans daemon, dirs, and entry", async () => {
+    const dir = freshDir();
+    const up = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "main.ts"), "up"],
+      { env: { BOARD_DATA_DIR: dir }, stdout: "pipe", stderr: "pipe" },
+    );
+    const booting = await awaitBootingEntry(dir);
+    // track for afterAll in case an assert fails mid-test
+    spawned.push({ pid: booting.pid, dataDir: booting.dataDir });
+    up.kill("SIGTERM");
+    const code = await up.exited;
+    expect(code).toBe(143); // the boot-window handler's non-zero exit
+    // the handler ran the catch-path cleanup: no daemon, no temp dir, no
+    // registry entry left behind
+    await awaitGone(booting.pid);
+    expect(existsSync(booting.dataDir)).toBe(false);
+    expect(existsSync(instancePaths(dir, booting.id).dir)).toBe(false);
+  }, 30_000);
+
+  test("contract 16: down --instance <id> works; positional still does (N6)", async () => {
+    const dir = freshDir();
+    const first = await runCli(["up"], { BOARD_DATA_DIR: dir });
+    expect(first.exitCode).toBe(0);
+    const firstUp = parseUp(first.stdout);
+    trackInstance(dir, firstUp);
+    const byFlag = await runCli(["down", "--instance", firstUp.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(byFlag.exitCode).toBe(0);
+    expect(byFlag.stdout).toContain(firstUp.id);
+
+    const second = await runCli(["up"], { BOARD_DATA_DIR: dir });
+    expect(second.exitCode).toBe(0);
+    const secondUp = parseUp(second.stdout);
+    trackInstance(dir, secondUp);
+    const byPositional = await runCli(["down", secondUp.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(byPositional.exitCode).toBe(0);
   }, 60_000);
 });

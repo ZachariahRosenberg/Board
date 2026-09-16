@@ -35,8 +35,9 @@ commands:
   status <board id>    one board's health: status, version, unresolved comments
   up [file]            spawn a session instance (temp data dir, random port);
                        a file publishes as v1 and prints a one-time human link
-  down [id]            tear down a session instance ($BOARD_INSTANCE or id):
-                       end boards, keep zip keepsakes, purge temp data + env
+  down [id]            tear down a session instance (id, --instance <id>, or
+                       $BOARD_INSTANCE): end boards, keep zip keepsakes, purge
+                       temp data + env
   instances            list session instances (live; --all closed; --prune stale)
 
 Session instances (board up): list/open/export/import/status and token

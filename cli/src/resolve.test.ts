@@ -15,7 +15,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../../server/src/db.ts";
-import { instancePaths } from "./instances.ts";
+import {
+  instancePaths,
+  readInstanceEntry,
+  writeInstanceEntry,
+} from "./instances.ts";
 
 const dirs: string[] = [];
 const spawned: Array<{ pid: number; dataDir: string }> = [];
@@ -229,6 +233,37 @@ describe("BOARD_INSTANCE env + precedence", () => {
     );
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain(boardId);
+    // the missing middle link (audit test-gap): BOARD_TOKEN env beats the
+    // sabotaged env-file token too — env file is the LAST fallback
+    const envBeat = await runCli(["list", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+      BOARD_TOKEN: up.token,
+    });
+    expect(envBeat.exitCode).toBe(0);
+    expect(envBeat.stdout).toContain(boardId);
+  }, 30_000);
+
+  test("contract 8: a non-loopback entry url refuses the credential (audit N3)", async () => {
+    const dir = freshDir();
+    const { up } = await spawnFixture(dir);
+    const paths = instancePaths(dir, up.id);
+    const entry = readInstanceEntry(paths);
+    if (entry === null) {
+      throw new Error("no instance entry for the fixture");
+    }
+    // url and pid are independently tamperable in the registry — point the
+    // entry's url off-loopback; the env-file bearer must never go there
+    writeInstanceEntry(paths, { ...entry, url: "http://10.0.0.1:7800/" });
+    const t0 = Date.now();
+    const res = await runCli(["list", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain(up.id);
+    expect(res.stderr).toContain("not loopback");
+    // refused BEFORE any fetch: a request to 10.0.0.1 would hang on connect
+    // timeouts — the fast failure itself is the no-request proof
+    expect(Date.now() - t0).toBeLessThan(10_000);
   }, 30_000);
 });
 

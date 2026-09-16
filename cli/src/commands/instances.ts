@@ -10,15 +10,17 @@ import { resolveWebDist } from "../../../server/src/daemon.ts";
 import { openDb } from "../../../server/src/db.ts";
 import { createExchangeToken } from "../../../server/src/sessions.ts";
 import {
+  BOOT_GRACE_MS,
   countBoardsOnDisk,
   humanLink,
-  type InstanceEntry,
   instancePaths,
   instancesRoot,
   listRegistryEntries,
   PidForeignError,
   pidIdentity,
+  plausibleId,
   pruneStaleInstances,
+  type ReadyInstanceEntry,
   readInstanceEntry,
   spawnInstance,
   teardownInstance,
@@ -29,7 +31,7 @@ import { scan } from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
 export const INSTANCES_USAGE = `usage: board up [file] [--title T] [--format markdown|html] [--tags a,b] [--agent NAME] [--open]
-       board down [<id>] [--keep-data] [--no-export]
+       board down [<id>] [--instance <id>] [--keep-data] [--no-export]
        board instances [--all] [--prune]`;
 
 interface InstancesCommandInput {
@@ -176,13 +178,22 @@ async function runUp(input: InstancesCommandInput): Promise<number> {
 
   // `up` self-heals the registry (D20): stale (dead-pid) entries get the
   // down-on-dead cleanup — keepsakes included — and the run reports them.
-  for (const id of await pruneStaleInstances(config.dataDir, (m) =>
-    io.stderr(`board: ${m}`),
-  )) {
-    io.stdout(`pruned stale instance ${id} (pid gone)`);
+  // N4 (audit): a broken registry must never crash the spawn — the prune is
+  // housekeeping, so its failure is a `board: …` warning and the spawn goes
+  // ahead.
+  try {
+    for (const id of await pruneStaleInstances(config.dataDir, (m) =>
+      io.stderr(`board: ${m}`),
+    )) {
+      io.stdout(`pruned stale instance ${id} (pid gone)`);
+    }
+  } catch (err) {
+    io.stderr(
+      `board: stale-instance prune failed (${errText(err)}) — continuing with the spawn`,
+    );
   }
 
-  let spawned: { entry: InstanceEntry; token: string };
+  let spawned: { entry: ReadyInstanceEntry; token: string };
   try {
     spawned = await spawnInstance({
       registryDataDir: config.dataDir,
@@ -273,25 +284,42 @@ async function runUp(input: InstancesCommandInput): Promise<number> {
 
 async function runDown(input: InstancesCommandInput): Promise<number> {
   const { io, config } = input;
-  const scanned = scan(input.argv, [], ["--keep-data", "--no-export"]);
+  // N6 (audit ergonomics): down gains --instance like every other
+  // instance-aware command. Precedence: --instance flag > positional id >
+  // BOARD_INSTANCE env (flag and positional are equivalent; flag wins).
+  const scanned = scan(
+    input.argv,
+    ["--instance"],
+    ["--keep-data", "--no-export"],
+  );
   if (typeof scanned === "string") {
     return argError(io, scanned);
   }
   if (scanned.positional.length > 1) {
     return argError(io, "down takes at most one instance id");
   }
-  // Resolution order: positional id > BOARD_INSTANCE (what `source env` sets)
-  // > error with the live list.
-  const target = scanned.positional[0] ?? process.env.BOARD_INSTANCE;
+  const target =
+    scanned.values.get("instance") ??
+    scanned.positional[0] ??
+    process.env.BOARD_INSTANCE;
   if (target === undefined || target.length === 0) {
     io.stderr(
-      "board: down needs an instance id (or set BOARD_INSTANCE — see: board instances)",
+      "board: down needs an instance id (pass <id> or --instance <id>, or set BOARD_INSTANCE — see: board instances)",
     );
     for (const { entry } of listRegistryEntries(config.dataDir)) {
       if (entry !== null && entry.closedAt === undefined) {
-        io.stderr(`  ${entry.id}  ${entry.url}`);
+        io.stderr(`  ${entry.id}  ${entry.url ?? "(booting)"}`);
       }
     }
+    return 1;
+  }
+  // F1 guard 2 (audit): the id became a path above — only ids `up` could have
+  // minted may address the registry, so a `../`-style id can never reach
+  // files outside it.
+  if (!plausibleId(target)) {
+    io.stderr(
+      `board: "${target}" is not an instance id — ids look like s-<10 alphanumerics> (minted by board up)`,
+    );
     return 1;
   }
   const paths = instancePaths(config.dataDir, target);
@@ -379,11 +407,31 @@ async function runList(input: InstancesCommandInput): Promise<number> {
       rows.push([
         entry.id,
         "closed",
-        entry.url,
+        entry.url ?? "—",
         formatAge(entry.createdAt),
         String(entry.boards?.length ?? 0),
         entry.dataDir,
       ]);
+      continue;
+    }
+    // F3: a booting entry has no url — young ones are mid-boot (another
+    // shell's up; prune spares them), old ones are SIGKILL orphans that down
+    // or --prune will reap.
+    if (entry.booting === true) {
+      const young = Date.now() - Date.parse(entry.createdAt) < BOOT_GRACE_MS;
+      rows.push([
+        entry.id,
+        young ? "booting" : "boot-orphan",
+        "—",
+        formatAge(entry.createdAt),
+        String(countBoardsOnDisk(entry.dataDir)),
+        entry.dataDir,
+      ]);
+      if (!young) {
+        hints.push(
+          `instance ${entry.id} never finished booting — \`board down ${entry.id}\` (or \`board instances --prune\`) cleans it`,
+        );
+      }
       continue;
     }
     // Status is DERIVED (D20): pid identity at read time, never a stored flag.
@@ -393,7 +441,7 @@ async function runList(input: InstancesCommandInput): Promise<number> {
       rows.push([
         entry.id,
         "stale",
-        entry.url,
+        entry.url ?? "—",
         formatAge(entry.createdAt),
         boards,
         entry.dataDir,
@@ -405,7 +453,7 @@ async function runList(input: InstancesCommandInput): Promise<number> {
       rows.push([
         entry.id,
         "mismatch",
-        entry.url,
+        entry.url ?? "—",
         formatAge(entry.createdAt),
         "—",
         entry.dataDir,
@@ -417,7 +465,7 @@ async function runList(input: InstancesCommandInput): Promise<number> {
       rows.push([
         entry.id,
         "live",
-        entry.url,
+        entry.url ?? "—",
         formatAge(entry.createdAt),
         boards,
         entry.dataDir,

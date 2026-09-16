@@ -21,6 +21,7 @@ import {
   instancesRoot,
   listRegistryEntries,
   pidIdentity,
+  plausibleId,
   readEnvToken,
   readInstanceEntry,
 } from "./instances.ts";
@@ -58,6 +59,11 @@ export function selectInstance(
   const id = flag ?? envInstance();
   if (id === undefined || id.length === 0) {
     return null;
+  }
+  // F1 guard 2 (audit): only ids `up` could have minted become paths — a
+  // `../`-style id must never address files outside the registry.
+  if (!plausibleId(id)) {
+    return `invalid instance id "${id}" — ids look like s-<10 alphanumerics> (minted by board up)`;
   }
   const paths = instancePaths(config.dataDir, id);
   const entry = readInstanceEntry(paths);
@@ -118,6 +124,32 @@ function foreignRefusal(sel: Selection): string {
   return `instance "${sel.entry.id}": ${stateText(sel, "foreign")} — refusing to send credentials to it; inspect \`board instances --all\` or the registry at ${sel.paths.dir}`;
 }
 
+// F3 (audit): a booting entry has no url yet — its `up` died mid-boot (or is
+// mid-boot in another shell). There is nothing to target; `down` is the
+// remediation that manages (signals/purges) it.
+function bootingRefusal(sel: Selection): string {
+  return `instance "${sel.entry.id}" never finished booting (no url — its up was killed mid-boot?) — tear it down with: board down ${sel.entry.id}`;
+}
+
+// N3 (audit): url and pid are independently tamperable in the registry — a
+// non-loopback entry url would send the env-file bearer to a remote machine.
+// Instance paths only ever speak loopback; refused without a workaround hint
+// (credential-leak defense). An explicit --token to the SHARED daemon (its
+// url comes from the local config, not the registry) stays the user's call.
+function isLoopbackUrl(url: string): boolean {
+  try {
+    // IPv6 hosts come back bracketed ("[::1]")
+    const host = new URL(url).hostname.replace(/^\[/, "").replace(/\]$/, "");
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function loopbackRefusal(sel: Selection): string {
+  return `instance "${sel.entry.id}": entry url "${sel.entry.url}" is not loopback — refusing to send credentials to it; inspect \`board instances --all\` or the registry at ${sel.paths.dir}`;
+}
+
 // The keepsake hint rides every closed-instance REST error: the disk bundles
 // still work without a daemon — that is the whole point of down's zips.
 function notServing(sel: Selection, state: InstanceState): string {
@@ -147,6 +179,18 @@ export function restTarget(
     }
     return { baseUrl: originUrlFor(config.host, config.port), token };
   }
+  // F3 (audit): the url is the first fact settled — an entry without one
+  // never finished booting. An OPEN no-url entry is refused outright (its up
+  // died mid-boot, or is mid-boot in another shell — nothing to target in
+  // any state); a CLOSED one was down'ed mid-boot and gets the ordinary
+  // not-serving answer, keepsake hint included.
+  const url = sel.entry.url;
+  if (url === undefined) {
+    if (sel.entry.closedAt !== undefined) {
+      return notServing(sel, "closed");
+    }
+    return bootingRefusal(sel);
+  }
   const state = instanceState(sel);
   if (state === "foreign") {
     return foreignRefusal(sel);
@@ -158,7 +202,10 @@ export function restTarget(
   if (token === undefined) {
     return `no token: pass --token <token>, set BOARD_TOKEN, or source the instance env file (${sel.paths.env})`;
   }
-  return { baseUrl: sel.entry.url, token };
+  if (!isLoopbackUrl(url)) {
+    return loopbackRefusal(sel);
+  }
+  return { baseUrl: url, token };
 }
 
 export type ExportTarget =
@@ -188,13 +235,27 @@ export function exportTarget(
       token,
     };
   }
+  // F3 (audit): the url is settled first — an OPEN no-url entry never
+  // finished booting and is refused (its db may be mid-migration; `board
+  // down <id>` is the cleanup); a CLOSED one was down'ed mid-boot and the
+  // disk keepsake path is exactly what export exists for.
+  const url = sel.entry.url;
+  if (url === undefined) {
+    if (sel.entry.closedAt === undefined) {
+      return bootingRefusal(sel);
+    }
+    return { mode: "disk", selection: sel };
+  }
   const state = instanceState(sel);
   if (state === "live") {
     const token = instanceToken(sel, parsed.token);
     if (token === undefined) {
       return `no token: pass --token <token>, set BOARD_TOKEN, or source the instance env file (${sel.paths.env})`;
     }
-    return { mode: "rest", baseUrl: sel.entry.url, token };
+    if (!isLoopbackUrl(url)) {
+      return loopbackRefusal(sel);
+    }
+    return { mode: "rest", baseUrl: url, token };
   }
   if (state === "foreign") {
     return foreignRefusal(sel);
@@ -224,6 +285,16 @@ export function openTarget(
       dataDir: config.dataDir,
     };
   }
+  // F3 (audit): the url is settled first — an OPEN no-url entry never
+  // finished booting (nothing serves the link); a CLOSED one gets the
+  // ordinary not-running answer.
+  const url = sel.entry.url;
+  if (url === undefined) {
+    if (sel.entry.closedAt !== undefined) {
+      return `instance "${sel.entry.id}" is not running (${stateText(sel, "closed")}) — nothing serves the human link`;
+    }
+    return bootingRefusal(sel);
+  }
   const state = instanceState(sel);
   if (state === "foreign") {
     return foreignRefusal(sel);
@@ -231,7 +302,7 @@ export function openTarget(
   if (state !== "live") {
     return `instance "${sel.entry.id}" is not running (${stateText(sel, state)}) — nothing serves the human link`;
   }
-  return { baseUrl: sel.entry.url, dataDir: sel.entry.dataDir };
+  return { baseUrl: url, dataDir: sel.entry.dataDir };
 }
 
 // token add|list|revoke need only the instance's db FILE — a closed instance
