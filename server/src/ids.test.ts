@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db.ts";
-import { newBoardId, shortId } from "./ids.ts";
+import { newId, shortId } from "./ids.ts";
 
 const dirs: string[] = [];
 const dbs: Database[] = [];
@@ -51,10 +51,10 @@ describe("shortId", () => {
   });
 });
 
-describe("newBoardId", () => {
+describe("newId", () => {
   test("returns an id that is not present in the boards table", () => {
     const db = freshDb();
-    const id = newBoardId(db);
+    const id = newId(db);
     expect(id).toMatch(/^[0-9A-Za-z]{10}$/);
     const row = db.prepare("SELECT id FROM boards WHERE id = ?").get(id) as {
       id: string;
@@ -70,7 +70,7 @@ describe("newBoardId", () => {
       seen++;
       return seen <= 2;
     };
-    const id = newBoardId(db, firstTwoExist);
+    const id = newId(db, firstTwoExist);
     expect(seen).toBe(3);
     expect(id).toMatch(/^[0-9A-Za-z]{10}$/);
   });
@@ -82,17 +82,17 @@ describe("newBoardId", () => {
       calls++;
       return true;
     };
-    expect(() => newBoardId(db, alwaysExists)).toThrow();
+    expect(() => newId(db, alwaysExists)).toThrow();
     expect(calls).toBe(6);
   });
 
   test("the default checker actually consults the boards table", () => {
     const db = freshDb();
-    const id = newBoardId(db);
+    const id = newId(db);
     db.prepare(
       "INSERT INTO boards (id, title, format, created_by, created_at) VALUES (?, 't', 'markdown', 'a', '2026-01-01T00:00:00Z')",
     ).run(id);
-    const second = newBoardId(db);
+    const second = newId(db);
     expect(second).not.toBe(id);
   });
 });

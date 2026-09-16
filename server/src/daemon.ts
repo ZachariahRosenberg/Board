@@ -1,6 +1,13 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  AssetNotAnImage,
+  AssetTooLarge,
+  AssetTypeNotAllowed,
+  AssetUnreadable,
+  BoardAssetQuotaExceeded,
+} from "./assets.ts";
 import { requireAuth } from "./auth.ts";
 import { CommentNotFound, InvalidAnchor } from "./comments.ts";
 import type { Config } from "./config.ts";
@@ -16,6 +23,7 @@ import {
   requireJsonContentType,
 } from "./http.ts";
 import { handleMcpNonPost, handleMcpPost, requireMcpActor } from "./mcp.ts";
+import { assetRoutes, isBoardAssetPath, serveAsset } from "./routes/assets.ts";
 import { boardRoutes } from "./routes/boards.ts";
 import { commentRoutes } from "./routes/comments.ts";
 import { eventRoutes } from "./routes/events.ts";
@@ -66,6 +74,7 @@ const routes: Route[] = [
   ...commentRoutes,
   ...eventRoutes,
   ...webhookRoutes,
+  ...assetRoutes,
   streamRoute,
 ];
 
@@ -279,6 +288,21 @@ function errorResponse(
   if (err instanceof ContentTooLarge) {
     return jsonError(413, "payload_too_large", err.message, headers);
   }
+  if (err instanceof AssetTooLarge) {
+    return jsonError(413, "asset_too_large", err.message, headers);
+  }
+  if (err instanceof BoardAssetQuotaExceeded) {
+    return jsonError(413, "board_asset_quota_exceeded", err.message, headers);
+  }
+  if (err instanceof AssetTypeNotAllowed) {
+    return jsonError(400, "asset_type_not_allowed", err.message, headers);
+  }
+  if (err instanceof AssetNotAnImage) {
+    return jsonError(400, "asset_not_an_image", err.message, headers);
+  }
+  if (err instanceof AssetUnreadable) {
+    return jsonError(400, "asset_path_unreadable", err.message, headers);
+  }
   if (err instanceof InvalidWebhookUrl) {
     return jsonError(400, "invalid_webhook_url", err.message, headers);
   }
@@ -298,40 +322,53 @@ async function handleApiRequest(
   try {
     assertAllowedHost(req, config);
     rejectCrossSite(req);
+    const { pathname } = new URL(req.url);
+    // Match the route first: raw-body routes (binary asset ingest) read their
+    // own body and are exempt from the JSON-only enforcement below.
+    let matched: { route: Route; params: Record<string, string> } | null = null;
+    for (const route of routes) {
+      const params = matchRoute(route, req.method, pathname);
+      if (params !== null) {
+        matched = { route, params };
+        break;
+      }
+    }
+    // JSON-only writes + the body cap stay AHEAD of any routing outcome
+    // (415/413 must not lose to 404/405) — except raw-body routes.
     let body: unknown;
-    if (isUnsafeMethod(req.method)) {
+    if (isUnsafeMethod(req.method) && matched?.route.rawBody !== true) {
       requireJsonContentType(req);
       body = await readJsonBody(req);
     }
-    const { pathname } = new URL(req.url);
-    for (const route of routes) {
-      const params = matchRoute(route, req.method, pathname);
-      if (params === null) {
-        continue;
+    if (matched === null) {
+      // 405 is computed over routes whose pattern matches the concrete pathname
+      const allowed = [
+        ...new Set(
+          routes
+            .filter((route) => matchPath(route, pathname) !== null)
+            .map((route) => route.method),
+        ),
+      ];
+      if (allowed.length > 0) {
+        return jsonError(
+          405,
+          "method_not_allowed",
+          `${req.method} is not allowed for ${pathname}`,
+          { allow: allowed.join(", ") },
+        );
       }
-      const ctx: RequestContext = { body, params, db, dataDir };
-      if (routeRequiresAuth(route)) {
-        ctx.actor = requireAuth(req, db);
-      }
-      return await route.handler(req, ctx);
+      throw new HttpError(404, "not_found", `no route for ${pathname}`);
     }
-    // 405 is computed over routes whose pattern matches the concrete pathname
-    const allowed = [
-      ...new Set(
-        routes
-          .filter((route) => matchPath(route, pathname) !== null)
-          .map((route) => route.method),
-      ),
-    ];
-    if (allowed.length > 0) {
-      return jsonError(
-        405,
-        "method_not_allowed",
-        `${req.method} is not allowed for ${pathname}`,
-        { allow: allowed.join(", ") },
-      );
+    const ctx: RequestContext = {
+      body,
+      params: matched.params,
+      db,
+      dataDir,
+    };
+    if (routeRequiresAuth(matched.route)) {
+      ctx.actor = requireAuth(req, db);
     }
-    throw new HttpError(404, "not_found", `no route for ${pathname}`);
+    return await matched.route.handler(req, ctx);
   } catch (err) {
     return errorResponse(err);
   }
@@ -366,8 +403,8 @@ function isApiPath(pathname: string): boolean {
 
 // The host server is three things in one: /api/* through the route table,
 // /libs/* (vendored pinned libs — D18: board scripts run in the app origin
-// and load them root-relative), and everything else the built SPA — all with
-// the same request hardening.
+// and load them root-relative), board assets under /assets/<id>, and
+// everything else the built SPA — all with the same request hardening.
 async function handleHostRequest(
   req: Request,
   config: Config,
@@ -394,6 +431,11 @@ async function handleHostRequest(
         `${req.method} is not allowed for static paths`,
         { ...headers, allow: "GET" },
       );
+    }
+    // board assets before the SPA statics: the 10-char id shape is what keeps
+    // vite's hashed /assets/* bundle files falling through to web/dist
+    if (isBoardAssetPath(pathname)) {
+      return serveAsset(req, db, dataDir, headers);
     }
     if (pathname.startsWith("/libs/")) {
       return serveLib(libsDir, pathname, headers);

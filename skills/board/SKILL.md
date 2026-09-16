@@ -36,6 +36,16 @@ description: Publish plans and results to the shared board for async human revie
 | `board_end` | closes the board's review loop | board_id |
 | `board_status` | daemon liveness + counts | — |
 | `board_subscribe` | registers a webhook for signed event push | board_id, webhook_url, webhook_secret? |
+| `board_upload_image` | copies a local image into a board, verified + sanitized | board_id, path (absolute, on the daemon host) |
+
+## Images
+
+To put a screenshot or diagram on a board, call `board_upload_image` with the image's **absolute path on this host** (the daemon copies and verifies it — png, jpeg, gif, webp, or svg, 10 MB per image / 8 MB per board). The result carries `asset_id` plus ready-to-paste embed snippets:
+
+- markdown boards: `![image](asset:<id>)` — write this in your next `board_publish`
+- html boards: `<img src="/assets/<id>">` — reference the URL directly
+
+Never invent asset ids or reference `/assets/<id>` URLs you did not get from the tool — unknown ids render as broken images.
 
 ## Consumption rule — exactly one
 

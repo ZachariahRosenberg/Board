@@ -79,7 +79,7 @@ describe("openDb", () => {
     const migrations = second
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
-    expect(migrations.map((row) => row.version)).toEqual([1, 2, 3, 4]);
+    expect(migrations.map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
     second.close();
   });
 

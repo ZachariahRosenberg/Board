@@ -1,4 +1,4 @@
-// MCP Streamable HTTP endpoint (M5-lite, D16): eleven tools mapping 1:1 onto the
+// MCP Streamable HTTP endpoint (M5-lite, D16): twelve tools mapping 1:1 onto the
 // service layer — the same functions the REST routes call, so the event log
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
@@ -9,6 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ingestAssetFromPath } from "./assets.ts";
 import { resolveRequestToken } from "./auth.ts";
 import {
   countUnresolvedRoots,
@@ -36,7 +37,7 @@ import { verifyToken } from "./tokens.ts";
 import { subscribeWebhook } from "./webhooks.ts";
 
 const MCP_SERVER_NAME = "board";
-const MCP_SERVER_VERSION = "0.5.0";
+const MCP_SERVER_VERSION = "0.6.0";
 
 interface McpContext {
   db: Database;
@@ -351,6 +352,33 @@ function registerBoardTools(
           };
         }
         return textResult(status);
+      }),
+  );
+
+  server.registerTool(
+    "board_upload_image",
+    {
+      description:
+        "Copy a local image file (absolute path on the daemon's host) into a board as a verified, sanitized asset. Returns the asset id plus ready-to-paste embed snippets.",
+      inputSchema: {
+        board_id: z.string(),
+        path: z.string().min(1),
+      },
+    },
+    ({ board_id, path }) =>
+      run(() => {
+        const asset = ingestAssetFromPath(db, dataDir, board_id, {
+          path,
+          actor: actor.name,
+        });
+        return textResult({
+          asset_id: asset.id,
+          board_id: asset.board_id,
+          mime: asset.mime,
+          size: asset.size,
+          embed_markdown: `![image](asset:${asset.id})`,
+          embed_html: `<img src="/assets/${asset.id}">`,
+        });
       }),
   );
 }

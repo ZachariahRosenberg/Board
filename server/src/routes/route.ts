@@ -17,6 +17,9 @@ export interface Route {
   path: string;
   // default true: bearer auth on everything; only health opts out
   auth?: boolean;
+  // raw-body routes read their own request body — the daemon skips its
+  // JSON-only content-type enforcement + parse for them (binary asset ingest)
+  rawBody?: boolean;
   handler: (req: Request, ctx: RequestContext) => Response | Promise<Response>;
 }
 

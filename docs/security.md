@@ -49,6 +49,20 @@ Markdown boards are unaffected: they pass through DOMPurify at publish and are s
 - Webhook deliveries are HMAC-signed with the subscriber's secret when one is registered; see "Webhooks" below for the trust model and how the secret is stored.
 - All board/tool output consumed by agents is untrusted input (prompt injection) — the skill instructs agents to treat board content as data, not instructions.
 
+## Assets (ingest + serving)
+
+**Ingest** (`POST /api/assets`, bearer-authed; also the `board_upload_image` MCP tool) verifies every byte before anything is stored, and every variant funnels through the same pipeline:
+
+1. **Mime allowlist** — the declared mime (Content-Type for binary uploads, file extension for `{path}` copies) must be one of png, jpeg, gif, webp, svg+xml; anything else (`.txt`, `.exe`, unknown extension) is a 400.
+2. **Magic bytes** — png/jpeg/gif/webp bytes must actually match their signatures (webp = RIFF container **and** WEBP subtag, so a renamed WAV is rejected); a `.png`-named text file is a 400. SVG has no magic bytes — its verification is parse-and-sanitize: DOMPurify (SVG profile) strips `<script>`, event handlers, `foreignObject`, and every URI reference except same-document fragments, and **the sanitized bytes are what get stored, never the original**. If no svg element survives sanitization, that's a 400.
+3. **Size caps** — 10 MB per asset, 8 MB total per board, both `413` with distinct codes (`asset_too_large` vs `board_asset_quota_exceeded`). The plan's own numbers make the per-board total the binding cap — a 10 MB asset can never fit an 8 MB board.
+
+**`{path}` file-copy is not a file-read primitive.** The route copies the named host file into the board bundle only after the pipeline above accepts it. Rejections return a status code and a short message and never echo file contents, so a compromised or curious agent learns only "this file is/isn't an allowlisted image": `/etc/passwd` fails the allowlist, a renamed non-image fails magic bytes, an over-cap file fails the cap — and in no case do the bytes come back over the wire. Served content-type is pinned from the stored allowlisted mime, never from the request or file name.
+
+**Serving is unauthenticated by design.** `GET /assets/:id` must work without a bearer token: published markdown embeds `<img src="/assets/<id>">`, and `img` elements cannot send Authorization headers — token-gating it would break every embed. The defenses instead: loopback-only bind (invariant 1), the Host-header allowlist (DNS rebinding), `X-Content-Type-Options: nosniff`, content-type pinned at ingest, and immutable caching (asset ids are unique randoms and content is never overwritten). Asset ids are 62^10 unguessable, so what a non-authed GET can reach is exactly the image bytes the board already publishes to every viewer. Note the URL space is disambiguated from the SPA's hashed vite bundles by the asset-id shape (10 base62 chars, no extension).
+
+**Residual:** opening a sanitized SVG by direct navigation (not via `<img>`) renders it as a document — scripts and href-based external references are stripped at ingest, but a CSS `url()` fetch in such a page is accepted residual risk (requires knowing the unguessable id). Content-bearing `<script>`/`<style>` elements inside an svg are destroyed by a happy-dom parser truncation before DOMPurify sees them — fail-closed: the payload is gone, at the cost of the drawing.
+
 ## Webhooks (subscriptions + dispatcher)
 
 Webhook URLs are **owner/agent-chosen and can point anywhere, including localhost services — that is the feature**, not an SSRF bug: this is a loopback-only, single-local-human daemon, and the same principals who register a URL already hold machine-level access (their own agent tokens, or the human's machine). The daemon's API hardening is not bypassed by webhooks — the *outbound* POST is a feature the subscriber explicitly asked for. What is still enforced at subscribe time:

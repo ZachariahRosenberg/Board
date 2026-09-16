@@ -29,6 +29,22 @@ export interface Version extends VersionMeta {
   source_md: string | null;
 }
 
+// Assets are board-scoped image files (docs/plan.md "Image annotation"): the
+// file lives in the board bundle (boards/<id>/assets/<file>), the row is the
+// index that serving (GET /assets/:id) resolves across boards.
+export type AssetSource = "copy" | "binary";
+
+export interface Asset {
+  id: string;
+  board_id: string;
+  file: string;
+  mime: string;
+  size: number;
+  source: AssetSource;
+  created_by: string;
+  created_at: string;
+}
+
 // Anchors extracted from a published document (data-ba ids); comment anchors reference these.
 export interface ExtractedAnchor {
   id: string;

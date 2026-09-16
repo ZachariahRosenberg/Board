@@ -11,7 +11,7 @@ import type {
 } from "./domain.ts";
 import { appendEvent } from "./events.ts";
 import { MAX_BODY_BYTES } from "./http.ts";
-import { newBoardId } from "./ids.ts";
+import { newId } from "./ids.ts";
 import { renderHtmlDocument, renderMarkdownDocument } from "./render.ts";
 
 export class StoreError extends Error {
@@ -156,7 +156,7 @@ export function createBoard(
   dataDir: string,
   input: CreateBoardInput,
 ): Board {
-  const id = newBoardId(db);
+  const id = newId(db);
   const board: Board = {
     id,
     title: input.title,

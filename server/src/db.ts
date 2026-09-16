@@ -110,6 +110,25 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       ALTER TABLE subscribers ADD COLUMN id TEXT;
     `,
   },
+  {
+    // Assets index (M6, docs/plan.md "Image annotation"): the file lives in
+    // the board bundle; this row is what cross-board serving (GET /assets/:id)
+    // resolves. size is bytes — the per-board quota sums it.
+    version: 5,
+    sql: `
+      CREATE TABLE assets (
+        id TEXT PRIMARY KEY,
+        board_id TEXT NOT NULL REFERENCES boards (id),
+        file TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('copy', 'binary')),
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_assets_board ON assets (board_id);
+    `,
+  },
 ];
 
 export function openDb(dataDir: string): Database {

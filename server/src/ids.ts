@@ -2,7 +2,11 @@ import type { Database } from "bun:sqlite";
 
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-export function shortId(length = 10): string {
+// The id length every URL-visible short id shares (boards, assets); the
+// asset-serving route pattern keys on exactly this shape.
+export const SHORT_ID_LENGTH = 10;
+
+export function shortId(length = SHORT_ID_LENGTH): string {
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
   let id = "";
@@ -12,13 +16,16 @@ export function shortId(length = 10): string {
   return id;
 }
 
-export type BoardIdExists = (id: string) => boolean;
+export type IdExists = (id: string) => boolean;
 
 const MAX_RETRIES = 5;
 
-export function newBoardId(
+// Shared unique-short-id helper (boards, assets): retries past collisions
+// detected via the exists seam. The default seam consults the boards table —
+// callers for other tables pass their own.
+export function newId(
   db: Database,
-  exists: BoardIdExists = (id) =>
+  exists: IdExists = (id) =>
     db.prepare("SELECT 1 FROM boards WHERE id = ?").get(id) !== null,
 ): string {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -28,6 +35,6 @@ export function newBoardId(
     }
   }
   throw new Error(
-    `could not generate a unique board id after ${MAX_RETRIES} retries`,
+    `could not generate a unique id after ${MAX_RETRIES} retries`,
   );
 }

@@ -6,6 +6,7 @@ import katex from "katex";
 import { marked } from "marked";
 import { codeToHtml } from "shiki";
 import type { ExtractedAnchor } from "./domain.ts";
+import { SHORT_ID_LENGTH } from "./ids.ts";
 
 const window = new Window();
 
@@ -147,6 +148,20 @@ const SANITIZE_CONFIG: Config = {
   FORBID_TAGS: ["script", "iframe", "object", "embed", "noscript"],
 };
 
+// SVG assets are sanitized at ingest with an SVG-only profile (invariant 6,
+// docs/security.md "Assets"): event handlers are never in any profile's allow
+// list; script + foreignObject are in the svg profile by default and are
+// explicitly forbidden; and the URI allowlist narrows to same-document
+// fragment references so no external beacon can ride an asset. xmlns
+// declarations are exempt from that narrowing — without them the served
+// image/svg+xml document would not parse as SVG.
+const SVG_SANITIZE_CONFIG: Config = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  FORBID_TAGS: ["script", "foreignobject"],
+  ALLOWED_URI_REGEXP: /^#/,
+  ADD_URI_SAFE_ATTR: ["xmlns", "xmlns:xlink"],
+};
+
 const MATH_RE = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
 const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 const CODE_HIGHLIGHT_THEME = "github-light";
@@ -160,7 +175,10 @@ export async function renderMarkdownDocument(
   md: string,
 ): Promise<RenderedDocument> {
   const fragment = await marked.parse(md);
-  const sanitized = purifier.sanitize(fragment, SANITIZE_CONFIG);
+  const sanitized = purifier.sanitize(
+    rewriteAssetUris(fragment),
+    SANITIZE_CONFIG,
+  );
   const doc = new window.DOMParser().parseFromString(sanitized, "text/html");
   const body = doc.body as unknown as Element;
   convertMermaidBlocks(doc, body);
@@ -171,6 +189,30 @@ export async function renderMarkdownDocument(
     html: wrapDocument(body.innerHTML),
     anchors: collectMarkdownAnchors(body),
   };
+}
+
+// Asset embeds (M6): ![alt](asset:<id>) rewrites to /assets/<id> BEFORE
+// sanitize — DOMPurify strips unknown uri schemes, so a post-sanitize rewrite
+// would have nothing left to rewrite (and widening the sanitizer's URI scheme
+// list for asset: is exactly what invariant 5 forbids). Only shape-valid ids
+// (the shared shortId length) rewrite; anything else keeps its asset: URI,
+// which DOMPurify then strips, degrading the img to a visible broken image.
+// Broken-image over drop: a dropped image silently falsifies the document,
+// while a broken image is honest, harmless (no script, same-origin fetch at
+// worst), and shows up in feedback screenshots. Unknown ids 404 at serve time.
+function rewriteAssetUris(fragment: string): string {
+  const doc = new window.DOMParser().parseFromString(fragment, "text/html");
+  for (const img of [...doc.body.querySelectorAll("img")]) {
+    const src = img.getAttribute("src") ?? "";
+    if (!src.startsWith("asset:")) {
+      continue;
+    }
+    const id = src.slice("asset:".length);
+    if (new RegExp(`^[0-9A-Za-z]{${SHORT_ID_LENGTH}}$`).test(id)) {
+      img.setAttribute("src", `/assets/${id}`);
+    }
+  }
+  return doc.body.innerHTML;
 }
 
 // D18: html boards are derived documents too. The publish pipeline parses the
@@ -194,6 +236,32 @@ function parseFragment(doc: Document, html: string): Element {
   const holder = doc.createElement("div");
   holder.innerHTML = html;
   return holder;
+}
+
+// Ingest-time SVG verification (M6): SVG has no magic bytes — parse-and-
+// sanitize IS its verification (docs/security.md "Assets"). Runs on the same
+// D11-patched window/purifier as markdown. Returns null when the sanitized
+// output contains no svg element at all (the input was never an SVG document).
+//
+// Known happy-dom limitation, fail-closed: the HTML parser truncates an svg
+// subtree at a content-bearing <script>/<style> (everything after it inside
+// the svg is lost before DOMPurify ever sees it) — the attack payload is
+// destroyed either way; the drawing simply does not survive such input.
+export function sanitizeSvgDocument(svg: string): string | null {
+  // happy-dom (the daemon's DOMPurify window, D11) truncates a parsed svg
+  // subtree at a content-bearing <script>/<style> — everything after it is
+  // lost before DOMPurify ever sees it. Stripping both blocks up front means
+  // the parser never trips: attack payloads are removed deterministically and
+  // benign STYLED drawings survive intact (their styles are dropped — an
+  // honest, documented degradation, docs/security.md "Assets").
+  const stripped = svg
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+    .replace(/<script\b[^>]*\/>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "")
+    .replace(/<style\b[^>]*\/>/gi, "");
+  const sanitized = purifier.sanitize(stripped, SVG_SANITIZE_CONFIG);
+  const doc = new window.DOMParser().parseFromString(sanitized, "text/html");
+  return doc.querySelector("svg") !== null ? sanitized : null;
 }
 
 // Mermaid renders client-side in the web UI later; here we only swap the
