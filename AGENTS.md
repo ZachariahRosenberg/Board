@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository. Humans: this applies t
 
 `board` is a local-first shared board system: an always-on Bun daemon hosts rich boards (markdown + interactive HTML) that agents publish via MCP/REST, a human annotates with anchored comments in a web UI, and everyone consumes via an append-only event log.
 
-**Current status: M1–M7 all complete (2026-09-16)** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 13 tools, stateless Streamable HTTP), every board — markdown and agent HTML — renders in the host chrome with full anchoring (text selection, sections, rows, images; html boards get auto-injected `data-ba` at publish, scripts run per D18), humans comment with threads + resolve + live SSE (image comments carry arrow/box overlays, overlays post without body text — the overlay is the payload), agents consume feedback via the comments cursor (D15) or HMAC-signed webhooks; assets ingest through verification (magic bytes + mime allowlist + caps, SVG sanitized) and boards round-trip through export/import with the D18 quarantine re-examination. M7 added: the audit view (`GET /api/events` filters + human-only sessions list/revoke + token inventory; UI at `#/audit`), restore-to-version, the hardening pass (stream-enforced body caps, host headers on `/api` + `/mcp`, 30-day session TTL per D19), reference docs ([api](docs/api.md) / [anchors](docs/anchors.md) / [feedback-grammar](docs/feedback-grammar.md) / [deployment](docs/deployment.md) incl. Dockerfile), and `make smoke` (the scripted two-agents+human acceptance loop). `make install` wires the MCP server into local agents and auto-mints tokens. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
+**Current status: M1–M8 all complete (2026-09-16)** — the feedback loop is live end to end and dogfooded: agents publish boards via REST or MCP (`:7800/mcp`, 13 tools, stateless Streamable HTTP), every board — markdown and agent HTML — renders in the host chrome with full anchoring (text selection, sections, rows, images; html boards get auto-injected `data-ba` at publish, scripts run per D18), humans comment with threads + resolve + live SSE (image comments carry arrow/box overlays, overlays post without body text — the overlay is the payload), agents consume feedback via the comments cursor (D15) or HMAC-signed webhooks; assets ingest through verification (magic bytes + mime allowlist + caps, SVG sanitized) and boards round-trip through export/import with the D18 quarantine re-examination. M7 added: the audit view (`GET /api/events` filters + human-only sessions list/revoke + token inventory; UI at `#/audit`), restore-to-version, the hardening pass (stream-enforced body caps, host headers on `/api` + `/mcp`, 30-day session TTL per D19), reference docs ([api](docs/api.md) / [anchors](docs/anchors.md) / [feedback-grammar](docs/feedback-grammar.md) / [deployment](docs/deployment.md) incl. Dockerfile), and `make smoke` (the scripted two-agents+human acceptance loop). M8 added agent-managed session instances (D20): `board up`/`down`/`instances` run a task-scoped loopback daemon the agent owns end to end — OS-temp data dir, print-once token + 0600 credential env file, pid-identity + structural-guard teardown (audit-hardened: OS-tmp-shape check, scrubbed child env, boot-window cleanup), zip keepsakes — while the shared daemon stays human-managed. `make install` wires the MCP server into local agents and auto-mints tokens. The approved v1 plan is [docs/plan.md](docs/plan.md). Read the plan before writing code; read [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md) before touching `server/`.
 
 ## Read order
 
@@ -20,7 +20,7 @@ Below this required reading sit the reference docs — [docs/api.md](docs/api.md
 
 ## Commands
 
-All targets are live (`make list`/`export`/`import` arrived with M6):
+All targets are live (`make list`/`export`/`import` arrived with M6; session `up`/`down`/`instances` with M8):
 
 | Task | Command |
 |---|---|
@@ -32,6 +32,9 @@ All targets are live (`make list`/`export`/`import` arrived with M6):
 | Lint + format | `bunx biome check --write .` |
 | Run daemon | `make serve` |
 | Dev (hot reload) | `make dev` |
+| Spawn a session board | `make up [FILE=<md>] [TITLE="…"] [FLAGS=…]` (or positional `make up plan.md`) |
+| Tear down a session board | `make down [ID=s-xxxx] [FLAGS=…]` |
+| List session boards | `make instances [FLAGS=--all|--prune]` |
 | Mint agent token | `make token add <name>` (`--force` via `make token add <name> FLAGS=--force` re-mints a taken name, D17) |
 | Build web app | `make web` |
 | Open UI | `make open [board id]` |
@@ -48,13 +51,14 @@ These exist for security reasons ([docs/security.md](docs/security.md)). Do not 
 4. Events are append-only. Never mutate or delete an event row.
 5. Markdown published content passes through DOMPurify — no exceptions. html-format boards are exempt per D18; never add sanitization to them, or skip it for markdown, without the owner's say-so.
 6. Asset ingest verifies magic bytes + mime allowlist + size cap; the `{path}` file-copy route must never be usable to read non-image files.
-7. Never log or commit tokens; tokens are stored hashed.
+7. Never log or commit tokens; tokens are stored hashed. (The one sanctioned ephemeral exception is the D20 session-instance credential env file — mode 0600, purged at `board down`.)
 
 ## Conventions
 
 - TypeScript strict mode; formatting via biome — see [docs/style-guide.md](docs/style-guide.md).
 - **Minimal codebase**: when a feature is removed, its code, tests, and fixtures are removed in the same change — no dead code, no vestigial surfaces, no "might be useful later."
 - **Decision comments**: every non-obvious decision site in code carries a short comment with its why (and a [docs/decisions.md](docs/decisions.md) reference when one exists) so future agents inherit the context.
+- **Structural guards, not just identity checks**: a destructive path validates the *shape* of what it is about to touch (expected path roots, id shapes), not merely who or what it appears to be — corrupt state can falsify an identity check; it cannot falsify filesystem shape (M8 audit lesson, D20).
 - A change that affects the API surface, anchor schema, event types, or security headers updates the matching doc in the same change.
 - Decisions that deviate from the plan get a new entry in [docs/decisions.md](docs/decisions.md) — don't silently amend the plan.
 - Mark milestone progress by appending status to the milestone bullet in [docs/plan.md](docs/plan.md).

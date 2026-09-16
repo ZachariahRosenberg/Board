@@ -14,6 +14,8 @@ Every board — markdown and agent HTML — renders **in the host chrome** (D18)
 
 Ports are configurable (`BOARD_PORT`); default bind is `127.0.0.1` only, with an explicit, documented bind-list option for Docker-hosted agents.
 
+**Session instances (D20).** Alongside the always-on shared daemon, the CLI can spawn throwaway instances of the same single-process design: each is one `Bun.serve` process on its own OS-temp data dir and kernel-assigned loopback port (bind + Host allowlist pinned over the inherited env). The CLI (`board up`/`down`/`instances`) is the lifecycle owner — see [deployment.md](deployment.md) "Session instances". The shared daemon on `:7800` remains the MCP/always-on surface; no new REST routes were added for sessions.
+
 ## On disk
 
 ```
@@ -25,9 +27,10 @@ Ports are configurable (`BOARD_PORT`); default bind is `127.0.0.1` only, with an
     versions/NNN.html         immutable documents (+ NNN.md source for markdown input)
     assets/<id>.<ext>         images, bundled with their board
     events.jsonl              per-board event channel
+  instances/<id>/             session-instance registry (D20): instance.json (metadata, never tokens), env (0600 credential delivery), daemon.log, boards/ (zip keepsakes)
 ```
 
-SQLite is the queryable source of truth; the bundle layout exists so a board is one portable, greppable unit. Export builds a self-contained zip from the db (manifest + version sources + comments + asset bytes + the board's event rows as an audit snapshot); import re-creates the board under a new id through the quarantine re-ingest ([security.md](security.md) "Import quarantine"). All writes flow through the daemon's API — agents never touch these files.
+SQLite is the queryable source of truth; the bundle layout exists so a board is one portable, greppable unit. Export builds a self-contained zip from the db (manifest + version sources + comments + asset bytes + the board's event rows as an audit snapshot); import re-creates the board under a new id through the quarantine re-ingest ([security.md](security.md) "Import quarantine"). All writes flow through the daemon's API — agents never touch these files. The one CLI-owned exception is the session-instance registry (D20): `board up`/`down`/`instances` maintain `instances/<id>/` directly, while a session instance's own working data lives in an OS-temp dir for its short life.
 
 ## One document model
 

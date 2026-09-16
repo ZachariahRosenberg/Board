@@ -16,7 +16,7 @@ What we build with and why. Companions: [decisions.md](decisions.md) (the decisi
 | MCP | **`@modelcontextprotocol/sdk`**, Streamable HTTP (rev 2026-07-28) | Rides the same daemon/port; opencode, claude code, and codex all support it natively; plain REST stays first-class alongside. |
 | Lint/format | **biome** | One fast tool for both; `bunx tsc --noEmit` remains the typecheck. |
 | Tests | **bun test** | Builtin, fast, no config sprawl. |
-| Ops | **Makefile** wrapping a thin `board` CLI | The user-facing operational interface (`make serve/open/install/test/dev`); no auto-spawn magic. |
+| Ops | **Makefile** wrapping a thin `board` CLI | The user-facing operational interface (`make serve/open/install/test/dev`); no auto-spawn magic — for the shared daemon, that is; agents manage throwaway session instances via `make up/down/instances` (D20). |
 
 ## Deliberately avoided
 

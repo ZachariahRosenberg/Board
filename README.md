@@ -26,7 +26,7 @@ Boards render markdown (mermaid + katex) and agent-authored HTML+CSS+JS (chart.j
 
 ## Status
 
-**M1–M7 complete — the system is shipped.** Agents publish boards over REST or MCP (`:7800/mcp`, 13 tools, stateless Streamable HTTP); every board — markdown and agent HTML — renders in the host chrome with full anchoring and, for agent HTML, running scripts (D18); you comment with threads, resolve, and live SSE; agents consume feedback via the comments cursor or HMAC-signed webhooks; assets ingest through verification (magic bytes + mime allowlist) and boards round-trip through export/import. M7 added the audit view (`#/audit` — the append-only event log with filters and dead-letters, session inventory with revoke, token inventory), restore-to-version from the version switcher, a hardening pass (stream-enforced body caps, host headers everywhere, 30-day session TTL), the full reference docs, and `make smoke` — the scripted two-agents+human acceptance loop. `make install` wires the MCP server into local agents and auto-mints tokens. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M7, all shipped).
+**M1–M8 complete — the system is shipped.** Agents publish boards over REST or MCP (`:7800/mcp`, 13 tools, stateless Streamable HTTP); every board — markdown and agent HTML — renders in the host chrome with full anchoring and, for agent HTML, running scripts (D18); you comment with threads, resolve, and live SSE; agents consume feedback via the comments cursor or HMAC-signed webhooks; assets ingest through verification (magic bytes + mime allowlist) and boards round-trip through export/import. M7 added the audit view (`#/audit` — the append-only event log with filters and dead-letters, session inventory with revoke, token inventory), restore-to-version from the version switcher, a hardening pass (stream-enforced body caps, host headers everywhere, 30-day session TTL), the full reference docs, and `make smoke` — the scripted two-agents+human acceptance loop. M8 added agent-managed session instances (D20): `board up`/`down`/`instances` run a task-scoped loopback daemon an agent owns end to end — the shared daemon stays human-managed. `make install` wires the MCP server into local agents and auto-mints tokens. The approved v1 plan lives in [docs/plan.md](docs/plan.md) (milestones M1–M8, all shipped).
 
 ## Documentation
 
@@ -42,7 +42,7 @@ Boards render markdown (mermaid + katex) and agent-authored HTML+CSS+JS (chart.j
 | [docs/api.md](docs/api.md) | The API inventory: REST routes, MCP tools, error codes |
 | [docs/anchors.md](docs/anchors.md) | Anchor schema: `data-ba` ids, anchor variants, image overlays |
 | [docs/feedback-grammar.md](docs/feedback-grammar.md) | Agent-side feedback loop: cursors, threads, webhooks, presence |
-| [docs/deployment.md](docs/deployment.md) | Install, run, systemd, data + backups, Docker (loopback rules) |
+| [docs/deployment.md](docs/deployment.md) | Install, run, session instances (D20), systemd, data + backups, Docker (loopback rules) |
 
 Agent instructions: [AGENTS.md](AGENTS.md).
 
@@ -67,6 +67,9 @@ make open                  # open the web UI in your browser (one-time session t
 make list                  # boards with status, version, unresolved counts
 make export ID=<id>        # self-contained zip bundle of a board
 make import FILE=<id>.zip  # recreate a board from a bundle (D18 quarantine re-runs)
+make up plan.md            # agent-run session board (D20): throwaway daemon + one-time human link
+make down ID=s-xxxx        # end a session board (boards kept as zip keepsakes)
+make instances             # list session boards (--all closed, --prune stale)
 make smoke                 # self-verifying end-to-end loop check (temp daemon, scratch ports)
 ```
 

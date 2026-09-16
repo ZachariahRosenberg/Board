@@ -7,7 +7,7 @@ description: Publish plans and results to the shared board for async human revie
 
 ## What boards are
 
-- Shared review artifacts hosted by the always-on board daemon (`127.0.0.1:7800`): you publish markdown, the human reads it in a browser and annotates it with anchored comments, you consume the feedback and respond.
+- Shared review artifacts hosted by the always-on board daemon (`127.0.0.1:7800` — the shared daemon; task-scoped session instances are covered below): you publish markdown, the human reads it in a browser and annotates it with anchored comments, you consume the feedback and respond.
 - The loop is asynchronous. Publish and move on — **never block waiting on the human**. Check for feedback between task steps, not constantly.
 - Boards are append-only and versioned. Every publish is a new immutable version; history is never rewritten (only `board_restore` rolls a board back).
 
@@ -20,6 +20,36 @@ description: Publish plans and results to the shared board for async human revie
 5. **Reply**: for each new comment, `board_reply` (comment id, body) in that comment's thread — answer questions, say what you changed.
 6. **Resolve**: `board_resolve` (comment id) ONLY when the thread is actually addressed. Never resolve to make noise go away — an unresolved comment is the human's signal that work remains.
 7. **End**: when the work is done and threads are settled, `board_end` (board id) closes the loop.
+
+## Shared daemon or session instance?
+
+Pick by lifetime, not preference:
+
+- **Shared daemon** (`127.0.0.1:7800`, the MCP tools above) — the always-on surface for **persistent, cross-task boards**. The human owns its lifecycle; you never start or stop it.
+- **Session instance** (D20) — a **task-scoped loopback daemon you own end to end**: `board up` spawns it (OS-temp data dir, random port, one agent token), `board down` tears it down with zip keepsakes. Use it when a task needs its own human review loop — e.g. the shared daemon is down, or the review belongs to this task only and should not outlive it. MCP wiring points at the shared daemon only, so a session is driven via the CLI and REST.
+
+## The session loop
+
+```sh
+board up plan.md    # spawn + publish v1; prints the agent token (once),
+                    # a credentials env file, and a one-time human link
+```
+
+1. **Give the human the printed link** (`http://127.0.0.1:<port>/?token=…#/boards/<board_id>`) — it is one-time; they comment in the browser as usual.
+2. **Source the env file** the output names: `source <path>` — sets `BOARD_INSTANCE`, `BOARD_PORT`, `BOARD_TOKEN` for your shell.
+3. **Iterate over REST** with those credentials — publish versions and poll the comments cursor exactly like the MCP loop (the consumption rule and poller below apply unchanged):
+
+```sh
+curl -s -H "authorization: Bearer $BOARD_TOKEN" -H 'content-type: application/json' \
+  -d '{"format":"markdown","content":"…revised…","expected_version":1}' \
+  "http://127.0.0.1:${BOARD_PORT}/api/boards/<board_id>/publish"
+curl -s -H "authorization: Bearer $BOARD_TOKEN" \
+  "http://127.0.0.1:${BOARD_PORT}/api/boards/<board_id>/comments?since=0"
+```
+
+4. **Tear down**: `board down` (resolves `$BOARD_INSTANCE`; an explicit id works too). It ends open boards, keeps each board as a zip under the instance registry, stops the daemon, and purges the temp data dir and the env file — token included. Keepsake zips re-import with `make import`; a dead instance still yields its keepsakes. Several instances can run concurrently — `board instances` lists them.
+
+Keep sessions task-scoped: when the review is done, `board down` — do not leave daemons behind.
 
 ## Tool reference
 
@@ -111,7 +141,7 @@ Thirty iterations at 10 s covers ~5 minutes. If the cap hits with nothing new, g
 
 ## Daemon down
 
-`board_status` fails or connections are refused: tell the human to start the daemon with `make serve`. Agents do NOT start, stop, or restart the daemon. Once it is back up, re-check with `board_status` and continue the loop.
+`board_status` fails or connections are refused on the shared daemon (`127.0.0.1:7800`): tell the human to start it with `make serve` — you never start, stop, or restart the **shared** daemon. Once it is back up, re-check with `board_status` and continue the loop. The one exception is a task-scoped session instance (above): a daemon you start yourself with `board up` and must end with `board down`.
 
 ## Style
 
