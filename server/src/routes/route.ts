@@ -27,6 +27,25 @@ export function actorName(ctx: RequestContext): string {
   return ctx.actor.name;
 }
 
+// Human-only surfaces (the M7 operator panels: session inventory/revocation,
+// token inventory). The mirror of mcp.ts's requireMcpActor (D16), which
+// rejects human tokens for the inverse reason — same shape, opposite
+// direction: an agent enumerating human sessions or token names is recon,
+// so a VALID agent bearer still gets 403, not 401.
+export function requireHuman(ctx: RequestContext): Actor {
+  if (ctx.actor === undefined) {
+    throw new HttpError(
+      500,
+      "internal_error",
+      "authenticated route ran without an actor",
+    );
+  }
+  if (ctx.actor.kind !== "human") {
+    throw new HttpError(403, "forbidden", "human session required");
+  }
+  return ctx.actor;
+}
+
 // Non-object bodies read as {} so field validators reject them with the
 // missing field name (e.g. "title must be a string") instead of crashing.
 // Takes the raw body value (not the ctx) so raw-body routes can hand it a

@@ -1,7 +1,9 @@
 import type {
   Asset,
   Board,
+  BoardEvent,
   Comment,
+  EventType,
   Version,
   VersionMeta,
 } from "../../server/src/domain.ts";
@@ -16,7 +18,10 @@ export interface BoardWithVersions {
   versions: VersionMeta[];
 }
 
-export type BoardWithCounts = Board & { unresolved_comments: number };
+export type BoardWithCounts = Board & {
+  unresolved_comments: number;
+  subscriber_count: number;
+};
 
 export class ApiError extends Error {
   readonly status: number;
@@ -45,9 +50,19 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (token !== null) {
     headers.set("authorization", `Bearer ${token}`);
   }
-  // Every write carries a JSON body — the daemon rejects anything else (415,
-  // docs/security.md CSRF defense); browsers default fetch bodies to text/plain
-  if (init?.body !== undefined && headers.get("content-type") === null) {
+  // Every write carries the JSON content-type label — the daemon rejects
+  // unlabeled writes (415, docs/security.md CSRF defense); browsers default
+  // fetch bodies to text/plain. The label rides on bodyless writes too (e.g.
+  // DELETE /api/sessions/:id); a caller-set content-type (binary asset upload)
+  // is never overridden, and bodyless GET/HEAD stay unlabeled.
+  const isWrite =
+    init?.method !== undefined &&
+    init.method !== "GET" &&
+    init.method !== "HEAD";
+  if (
+    (isWrite || init?.body !== undefined) &&
+    headers.get("content-type") === null
+  ) {
     headers.set("content-type", "application/json");
   }
   const res = await fetch(path, { ...init, headers });
@@ -56,6 +71,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     clearSessionToken();
     unauthorizedHandler?.();
     throw new ApiError(401, "unauthorized", "session expired — run make open");
+  }
+  // 204 (e.g. DELETE /api/sessions/:id) has no body to parse
+  if (res.status === 204) {
+    return undefined as T;
   }
   if (!res.ok) {
     let code = `http_${res.status}`;
@@ -176,4 +195,78 @@ export function uploadAsset(boardId: string, file: File): Promise<Asset> {
     headers: { "content-type": file.type || "application/octet-stream" },
     body: file,
   });
+}
+
+// ── Audit view (M7) ────────────────────────────────────────────────────────
+
+export interface EventsPage {
+  events: BoardEvent[];
+  last_seq: number;
+}
+
+export interface EventQuery {
+  boardId?: string;
+  type?: EventType;
+  since?: number;
+  limit?: number;
+}
+
+// The global event log, ascending by seq within the page; `last_seq` is the
+// GLOBAL max seq (the next-poll cursor), not the last returned seq.
+export function getEvents(query: EventQuery = {}): Promise<EventsPage> {
+  const params = new URLSearchParams();
+  if (query.boardId !== undefined) {
+    params.set("board_id", query.boardId);
+  }
+  if (query.type !== undefined) {
+    params.set("type", query.type);
+  }
+  if (query.since !== undefined) {
+    params.set("since", String(query.since));
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  const qs = params.toString();
+  return apiFetch<EventsPage>(`/api/events${qs === "" ? "" : `?${qs}`}`);
+}
+
+// Mirrors the server domain SessionInfo (routes/session.ts): `id` is the row's
+// sha256 token-hash PK, `kind` splits live sessions from unexchanged exchange
+// rows — the audit listing ships BOTH (docs/security.md "Audit view").
+export interface SessionInfo {
+  id: string;
+  kind: "exchange" | "session";
+  created_at: string;
+  used_at: string | null;
+  expires_at: string | null;
+}
+
+export function listSessions(): Promise<SessionInfo[]> {
+  return apiFetch<{ sessions: SessionInfo[] }>("/api/sessions").then(
+    (page) => page.sessions,
+  );
+}
+
+export function revokeSession(id: string): Promise<void> {
+  return apiFetch<void>(`/api/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+// The audit tokens listing pins its own narrow shape — deliberately NOT the
+// domain TokenInfo (scopes/last_used_at): names + lifecycle timestamps only.
+// Token values are SHA-256 hashed server-side and never returned (invariant 7,
+// docs/security.md) — the UI has nothing to leak and no value column.
+export interface TokenRow {
+  name: string;
+  created_at: string;
+  revoked_at?: string | null;
+  last_seen?: string | null;
+}
+
+export function listTokens(): Promise<TokenRow[]> {
+  return apiFetch<{ tokens: TokenRow[] }>("/api/tokens").then(
+    (page) => page.tokens,
+  );
 }

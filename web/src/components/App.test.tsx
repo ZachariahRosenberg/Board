@@ -43,4 +43,19 @@ describe("App", () => {
     expect(container.innerHTML).toContain("Decision brief");
     clearSessionToken();
   });
+
+  test("the audit route renders the audit view and back returns to the list", async () => {
+    setSessionToken("sess-ok");
+    location.hash = "#/audit";
+    const container = render(<App />);
+    await act(async () => {});
+    expect(container.querySelector(".event-log")).not.toBe(null);
+    expect(container.querySelector("[aria-label='Sessions']")).not.toBe(null);
+    // back to the list via the hash
+    location.hash = "#/";
+    window.dispatchEvent(new Event("hashchange"));
+    await act(async () => {});
+    expect(container.innerHTML).toContain("Decision brief");
+    clearSessionToken();
+  });
 });

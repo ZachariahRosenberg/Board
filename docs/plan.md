@@ -55,7 +55,7 @@ one process: boardd (Bun.serve, single port — D18)
 
 ## REST API (`:7800/api`, bearer auth)
 
-- `POST /boards` · `GET /boards` (filters: status/tag/author; flags unresolved-comment counts + live subscriber count) · `GET /boards/:id` · `GET /boards/:id/versions/:n`
+- `POST /boards` · `GET /boards` (filters: status/tag/author; flags unresolved-comment counts + live subscriber count — both shipped: counts M3, subscribers M7) · `GET /boards/:id` · `GET /boards/:id/versions/:n`
 - `POST /boards/:id/publish` (new version; `expected_version` → 409) · `POST /boards/:id/end` (writes → 409, reads stay) · `POST /boards/:id/restore` (publishes copy of an old version as a new one, noted)
 - `GET /boards/:id/comments?since=<seq>` — **per-agent cursors** (`workspace:agent` scoped; resume returns exactly the unacked backlog)
 - `POST /boards/:id/comments` · `POST /comments/:id/reply` · `POST /comments/:id/resolve`

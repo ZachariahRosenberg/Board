@@ -23,4 +23,12 @@ describe("BoardList", () => {
       "#/boards/b1",
     );
   });
+
+  test("renders the subscriber count and the audit entry link", async () => {
+    const container = render(<BoardList />);
+    await act(async () => {});
+    expect(container.innerHTML).toContain("3 subs");
+    const auditLink = container.querySelector("a.audit-link");
+    expect(auditLink?.getAttribute("href")).toBe("#/audit");
+  });
 });

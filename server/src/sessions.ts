@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash, getRandomValues } from "node:crypto";
+import type { SessionInfo } from "./domain.ts";
 
 // docs/security.md "human browser session": `board open` mints a one-time
 // exchange token for the URL; the SPA swaps it at /api/session/exchange for a
@@ -92,4 +93,33 @@ export function verifySessionToken(db: Database, token: string): boolean {
   // Sessions have no expiry (exchange tokens do); the guard keeps this honest
   // if a future migration ever adds one.
   return row.expires_at === null || Date.parse(row.expires_at) > Date.now();
+}
+
+// The audit view's session inventory (M7): every row — spent exchange tokens
+// included, because the dogfooded leak this surface remediates was exactly a
+// pasted ?token= URL, and the operator needs to see (and kill) those too.
+// `kind` tells the operator which credential class a row is.
+export function listSessions(db: Database): SessionInfo[] {
+  const rows = db
+    .prepare(
+      "SELECT token_hash, kind, created_at, expires_at, used_at FROM sessions ORDER BY created_at DESC, token_hash ASC",
+    )
+    .all() as SessionRow[];
+  return rows.map((row) => ({
+    id: row.token_hash,
+    kind: row.kind as SessionInfo["kind"],
+    created_at: row.created_at,
+    used_at: row.used_at,
+    expires_at: row.expires_at,
+  }));
+}
+
+// Revoke = row delete. Sessions are state, not history — invariant 4 covers
+// the event log, which stays untouched here. This is the remediation for the
+// dogfooded session-token leak: a live credential pasted into a comment had
+// no kill switch (docs/security.md "Audit view"). Deleting the CURRENT
+// session is allowed — the UI's re-exchange flow handles the dead credential.
+export function revokeSession(db: Database, id: string): boolean {
+  const res = db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(id);
+  return res.changes > 0;
 }

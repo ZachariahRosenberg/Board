@@ -56,6 +56,8 @@ Every version is stored as **one HTML document** rendered in the host chrome. `f
 
 Global monotonic `seq`; every mutation is one event: `board.created/imported/published/ended/restored`, `comment.created/replied/resolved`, `asset.added`, `agent.subscribed`, `webhook.failed`, … Events are append-only (an invariant) and the audit view is a filter over them.
 
+**Audit view (M7).** The web UI's audit view polls `GET /api/events` — a pure read over the events table with `board_id`, `type` (exact match; `type=webhook.failed` is the promised dead-letter view), `since`, and `limit` filters (default 100, clamped to 500), pages oldest-first so `since=<last shown>` pages forward, and `last_seq` carrying the GLOBAL max seq as the next-poll cursor. Any authenticated principal may read it (agents already hold the log via the jsonl mirrors and cursors — no new exposure), while the operator panels are human-session-only with agent bearers 403'd as recon (the mirror of MCP's D16 human-rejection): `GET /api/sessions` + `DELETE /api/sessions/:id` (revocation — the remediation for a dogfooded session-token leak; a sessions-table write, never an event) and `GET /api/tokens` (names + lifecycle only, never values or hashes). The UI polls rather than streams: the global `/api/stream` SSE already delivers an unfiltered live tail if one is wanted.
+
 Delivery is layered:
 
 | Channel | For | Guarantee |

@@ -40,6 +40,15 @@ Markdown boards are unaffected: they pass through DOMPurify at publish and are s
 | Browser probing / reading API responses | No CORS headers, ever — and never `Access-Control-Allow-Origin: null`; no state changes via GET |
 | MCP endpoint abuse (`POST /mcp`) | Agent-token-only — valid human session tokens are rejected (browsers are never MCP clients); same Host allowlist, cross-site rejection, JSON-only + 8 MB body cap as `/api`; stateless JSON mode — no sessions and no SSE stream to hijack, non-POST → 405 |
 
+## Audit view + operator surface (M7)
+
+The audit view's endpoints are reads over existing state (plus exactly one new write target, session revocation) — nothing here touches the event log (invariant 4).
+
+- **`GET /api/events` — any authenticated principal (agent or human).** This is deliberately NOT a new exposure: the D1/D15 design already hands agents the event log directly (the global + per-board `events.jsonl` mirrors, the `?since=` cursors). The endpoint is a query convenience over rows agents can already read, and the substrate the audit UI polls: filters `board_id`, `type` (exact match — `type=webhook.failed` is the dead-letter view), `since`, and `limit` (default 100, clamped to 500). `last_seq` carries the GLOBAL max seq as the next-poll cursor, so a filtered or clamped page can never strand the poll behind events it didn't show.
+- **`GET /api/sessions` + `DELETE /api/sessions/:id` + `GET /api/tokens` — human-only; a valid agent bearer gets 403.** This is the actual security line of the audit surface. The reasoning mirrors MCP's D16 rejection of human tokens — same shape, opposite direction: an agent enumerating human sessions or agent token names is **recon** (credential inventory for a future impersonation), so the boundary is on the principal kind, not the credential's validity. Session rows expose lifecycle metadata only; `id` is the stored sha256 (safe — the token material is 256-bit random, and the plaintext never survives minting).
+- **`GET /api/tokens` never returns token values or hashes** — names + lifecycle (`created_at`, `last_seen`, `revoked_at`) only, mirroring `board token list`. Adjacent to invariant 7/8: the DB stores hashes, and no API surface exists to echo credential material back.
+- **Session revocation is the leak remediation.** Dogfood precedent: the owner pasted a live `?token=` URL into a board comment and had no way to kill the credential. `DELETE /api/sessions/:id` (204, human-only; 404 unknown id) deletes the session row — a sessions-table write, never an event — and includes the CURRENT session (self-revoke is allowed; the UI's re-exchange flow recovers). Revoking an unexchanged exchange row kills the leaked URL before it can be swapped.
+
 ## Content rules
 
 - Markdown rendered in the host chrome passes through DOMPurify, always; mermaid runs at `securityLevel: 'strict'`; katex through its standard pipeline. html-format boards are stored and rendered unsanitized per D18 — the CSP above is their only guard, by owner decision.

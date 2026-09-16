@@ -2,11 +2,17 @@ import { mock } from "bun:test";
 import type {
   Anchor,
   Board,
+  BoardEvent,
   Comment,
   Version,
   VersionMeta,
 } from "../../../server/src/domain.ts";
-import type { CreateCommentInput } from "../api.ts";
+import type {
+  CreateCommentInput,
+  EventQuery,
+  SessionInfo,
+  TokenRow,
+} from "../api.ts";
 
 // Shared component-test fixtures + the ../api.ts test double, used by every
 // component test file that renders through the api layer. Each bun test file
@@ -30,7 +36,21 @@ export const resolvedIds: string[] = [];
 // closure below must always see the current value
 export const uploadFailures: { error: Error | null } = { error: null };
 
-const MD_BOARD: Board & { unresolved_comments: number } = {
+// Audit view (M7): getEvents records its query object and pops the next page
+// off eventPages (empty queue → empty page, so untouched tests see "No events
+// yet."). Sessions/tokens read their mutable fixture arrays at call time;
+// revokeSession mutates sessionsList so the post-revoke refetch is
+// server-faithful and deterministic.
+export const eventQueries: EventQuery[] = [];
+export const eventPages: Array<{ events: BoardEvent[]; last_seq: number }> = [];
+export const sessionsList: SessionInfo[] = [];
+export const revokeCalls: string[] = [];
+export const tokensList: TokenRow[] = [];
+
+const MD_BOARD: Board & {
+  unresolved_comments: number;
+  subscriber_count: number;
+} = {
   id: "b1",
   title: "Decision brief",
   format: "markdown",
@@ -40,6 +60,7 @@ const MD_BOARD: Board & { unresolved_comments: number } = {
   created_at: "2026-09-15T10:00:00.000Z",
   current_version: 2,
   unresolved_comments: 2,
+  subscriber_count: 3,
 };
 
 export const TEXT_ANCHOR: Anchor = {
@@ -201,6 +222,11 @@ export function installApiMock(): void {
   replied.length = 0;
   resolvedIds.length = 0;
   uploadFailures.error = null;
+  eventQueries.length = 0;
+  eventPages.length = 0;
+  sessionsList.length = 0;
+  revokeCalls.length = 0;
+  tokensList.length = 0;
   mock.module("../api.ts", () => ({
     listBoards: async () => [MD_BOARD],
     getBoard: async (id: string) => {
@@ -272,5 +298,19 @@ export function installApiMock(): void {
     streamUrl: () => "/api/stream?token=stub",
     onUnauthorized: () => () => {},
     ApiError: class ApiError extends Error {},
+    getEvents: async (query: EventQuery = {}) => {
+      eventQueries.push(query);
+      return eventPages.shift() ?? { events: [], last_seq: 0 };
+    },
+    listSessions: async () => [...sessionsList],
+    revokeSession: async (id: string) => {
+      revokeCalls.push(id);
+      // server-faithful: a revoked session row disappears from the listing
+      const i = sessionsList.findIndex((session) => session.id === id);
+      if (i >= 0) {
+        sessionsList.splice(i, 1);
+      }
+    },
+    listTokens: async () => [...tokensList],
   }));
 }

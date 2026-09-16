@@ -6,11 +6,15 @@ import {
   exchange,
   getBoard,
   getComments,
+  getEvents,
   getVersion,
   listBoards,
+  listSessions,
+  listTokens,
   onUnauthorized,
   replyComment,
   resolveComment,
+  revokeSession,
   streamUrl,
 } from "./api.ts";
 import { installDom } from "./test-dom.ts";
@@ -189,6 +193,52 @@ describe("api client", () => {
     mockFetch(() => jsonResponse(401, { error: { code: "unauthorized" } }));
     await expect(completePasteExchange("burned")).rejects.toThrow("make open");
     expect(localStorage.getItem("board.session")).toBe("prior-session");
+    clearSessionToken();
+  });
+
+  test("revokeSession labels its bodyless DELETE as JSON (415 guard)", async () => {
+    setSessionToken("sess-token");
+    const calls = mockFetch(() => new Response(null, { status: 204 }));
+    await revokeSession("sess-7");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].input).toBe("/api/sessions/sess-7");
+    expect(calls[0].init?.method).toBe("DELETE");
+    expect(calls[0].init?.body).toBeUndefined();
+    expect(new Headers(calls[0].init?.headers).get("content-type")).toBe(
+      "application/json",
+    );
+    clearSessionToken();
+  });
+
+  test("audit endpoints build the pinned paths; revokeSession tolerates 204", async () => {
+    setSessionToken("sess-token");
+    const calls = mockFetch((call) => {
+      if (call.input.startsWith("/api/events")) {
+        return jsonResponse(200, { events: [], last_seq: 0 });
+      }
+      if (call.input === "/api/sessions") {
+        return jsonResponse(200, { sessions: [] });
+      }
+      if (call.input === "/api/tokens") {
+        return jsonResponse(200, { tokens: [] });
+      }
+      return new Response(null, { status: 204 });
+    });
+    await getEvents({ type: "webhook.failed", since: 5, limit: 100 });
+    expect(calls[0].input).toBe(
+      "/api/events?type=webhook.failed&since=5&limit=100",
+    );
+    await getEvents({ boardId: "b1" });
+    expect(calls[1].input).toBe("/api/events?board_id=b1");
+    await getEvents();
+    expect(calls[2].input).toBe("/api/events");
+    await listSessions();
+    expect(calls[3].input).toBe("/api/sessions");
+    await listTokens();
+    expect(calls[4].input).toBe("/api/tokens");
+    await revokeSession("sess-9");
+    expect(calls[5].input).toBe("/api/sessions/sess-9");
+    expect(calls[5].init?.method).toBe("DELETE");
     clearSessionToken();
   });
 });

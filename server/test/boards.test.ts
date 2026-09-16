@@ -123,6 +123,8 @@ describe("auth", () => {
       { method: "POST", path: "/api/boards/abcdefghij/restore" },
       { method: "GET", path: "/api/events" },
       { method: "GET", path: "/api/boards/abcdefghij/events" },
+      { method: "GET", path: "/api/sessions" },
+      { method: "GET", path: "/api/tokens" },
     ];
     for (const { method, path } of cases) {
       const res =
@@ -261,6 +263,36 @@ describe("GET /api/boards", () => {
     ]);
     const none = await s.api.get("/api/boards?tag=nope", { token });
     expect(await none.json()).toEqual([]);
+  });
+
+  test("flags subscriber_count: every registry row counts, webhook + cursor alike", async () => {
+    const s = server();
+    const watcher = await s.createAgent("subscriber-webhook-agent");
+    const listener = await s.createAgent("subscriber-cursor-agent");
+    const watched = await makeBoard(s, watcher.token, { title: "Watched" });
+    const lonely = await makeBoard(s, watcher.token, { title: "Lonely" });
+    // webhook registration = one subscribers row
+    const sub = await s.api.post(
+      `/api/boards/${watched.id}/subscribe`,
+      { webhook_url: "http://127.0.0.1:9/hook" },
+      { token: watcher.token },
+    );
+    expect(sub.status).toBe(201);
+    // a cursor poll by another agent auto-detects a second presence row
+    const poll = await s.api.get(`/api/boards/${watched.id}/comments`, {
+      token: listener.token,
+    });
+    expect(poll.status).toBe(200);
+    const res = await s.api.get("/api/boards", { token: watcher.token });
+    const boards = (await res.json()) as Array<{
+      id: string;
+      subscriber_count: number;
+    }>;
+    const counts = new Map(
+      boards.map((board) => [board.id, board.subscriber_count]),
+    );
+    expect(counts.get(watched.id)).toBe(2);
+    expect(counts.get(lonely.id)).toBe(0);
   });
 
   test("filters by author", async () => {

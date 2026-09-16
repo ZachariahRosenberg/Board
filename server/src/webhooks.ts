@@ -161,6 +161,19 @@ export function listSubscribers(db: Database, boardId: string): Subscriber[] {
   }));
 }
 
+// Live subscriber counts for the board list (docs/plan.md REST API "live
+// subscriber count" — shipped with the M7 audit work): every registry row
+// counts, webhook subscriptions and auto-detected sse/cursor presence rows
+// alike. One grouped query; boards with no rows default to 0 at the consumer.
+export function countSubscribersByBoard(db: Database): Map<string, number> {
+  const rows = db
+    .prepare(
+      "SELECT board_id, COUNT(*) AS c FROM subscribers GROUP BY board_id",
+    )
+    .all() as Array<{ board_id: string; c: number }>;
+  return new Map(rows.map((row) => [row.board_id, row.c]));
+}
+
 // 3 delivery attempts total (1 + 2 retries); default backoff after failure 1
 // is 500ms, after failure 2 is 2s (docs/plan.md; D9).
 export const WEBHOOK_MAX_ATTEMPTS = 3;

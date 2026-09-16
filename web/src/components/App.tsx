@@ -6,6 +6,7 @@ import {
   getSessionToken,
   setSessionToken,
 } from "../token.ts";
+import { AuditView } from "./AuditView.tsx";
 import { BoardList } from "./BoardList.tsx";
 import { BoardView } from "./BoardView.tsx";
 
@@ -66,7 +67,9 @@ export function App() {
   }
   return (
     <div className="container">
-      {route.name === "board" ? <BoardView id={route.id} /> : <BoardList />}
+      {route.name === "board" && <BoardView id={route.id} />}
+      {route.name === "audit" && <AuditView />}
+      {route.name === "list" && <BoardList />}
     </div>
   );
 }

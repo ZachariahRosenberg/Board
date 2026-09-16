@@ -151,6 +151,19 @@ export interface TokenInfo {
   revoked_at: string | null;
 }
 
+// Session-inventory row for the M7 audit view (docs/security.md "Audit view").
+// Lifecycle metadata only. `id` is the token_hash (the row's PK — a session
+// has no other stable key): exposing the sha256 reveals nothing usable since
+// the token material is 256-bit random, and the plaintext never survives
+// minting (invariant 8).
+export interface SessionInfo {
+  id: string;
+  kind: "exchange" | "session";
+  created_at: string;
+  used_at: string | null;
+  expires_at: string | null;
+}
+
 export interface Actor {
   kind: "human" | "agent";
   name: string;

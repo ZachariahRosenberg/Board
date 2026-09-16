@@ -4,7 +4,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "./db.ts";
-import { appendEvent, getBoardEvents, getEvents } from "./events.ts";
+import {
+  appendEvent,
+  getBoardEvents,
+  getEvents,
+  maxEventSeq,
+} from "./events.ts";
 
 const dirs: string[] = [];
 const dbs: Database[] = [];
@@ -205,6 +210,36 @@ describe("getEvents", () => {
     expect(rows[199].seq).toBe(200);
   });
 
+  test("filters by exact type", () => {
+    const { db, dataDir } = freshSetup();
+    appendEvent(db, dataDir, {
+      actor: "h",
+      type: "board.created",
+      boardId: "a",
+    });
+    appendEvent(db, dataDir, {
+      actor: "agent-1",
+      type: "webhook.failed",
+      boardId: "a",
+    });
+    appendEvent(db, dataDir, {
+      actor: "h",
+      type: "board.published",
+      boardId: "a",
+      payload: { n: 1 },
+    });
+    expect(getEvents(db, { type: "webhook.failed" }).map((e) => e.seq)).toEqual(
+      [2],
+    );
+    expect(getEvents(db, { type: "no.such" })).toEqual([]);
+    // composes with the other filters
+    expect(
+      getEvents(db, { type: "board.published", boardId: "a", since: 1 }).map(
+        (e) => e.seq,
+      ),
+    ).toEqual([3]);
+  });
+
   test("payloads come back JSON-parsed with structure intact", () => {
     const { db, dataDir } = freshSetup();
     const payload = { n: 3, label: "v3", deep: { arr: [{ k: "v" }] } };
@@ -246,5 +281,23 @@ describe("getBoardEvents", () => {
     expect(getBoardEvents(db, "a").map((e) => e.seq)).toEqual([1, 3, 4]);
     expect(getBoardEvents(db, "a", 1).map((e) => e.seq)).toEqual([3, 4]);
     expect(getBoardEvents(db, "b").map((e) => e.seq)).toEqual([2]);
+  });
+});
+
+describe("maxEventSeq", () => {
+  test("is the global max across boards, 0 on an empty log", () => {
+    const { db, dataDir } = freshSetup();
+    expect(maxEventSeq(db)).toBe(0);
+    appendEvent(db, dataDir, {
+      actor: "h",
+      type: "board.created",
+      boardId: "a",
+    });
+    appendEvent(db, dataDir, {
+      actor: "h",
+      type: "webhook.failed",
+      boardId: "b",
+    });
+    expect(maxEventSeq(db)).toBe(2);
   });
 });

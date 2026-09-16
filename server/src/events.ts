@@ -90,6 +90,8 @@ function emit(event: BoardEvent): void {
 interface GetEventsOptions {
   since?: number;
   boardId?: string;
+  // exact match — the audit view's dead-letter filter is type=webhook.failed
+  type?: string;
   limit?: number;
 }
 
@@ -106,6 +108,10 @@ export function getEvents(
   if (opts.boardId !== undefined) {
     where.push("board_id = ?");
     params.push(opts.boardId);
+  }
+  if (opts.type !== undefined) {
+    where.push("type = ?");
+    params.push(opts.type);
   }
   params.push(opts.limit ?? DEFAULT_EVENT_LIMIT);
   const sql = `
@@ -133,6 +139,17 @@ export function getBoardEventsUnbounded(
   boardId: string,
 ): BoardEvent[] {
   return getEvents(db, { boardId, limit: Number.MAX_SAFE_INTEGER });
+}
+
+// The audit view's next-poll cursor is the GLOBAL max seq, never the page's
+// last row: a filtered or clamped page must still advance the cursor past
+// the events it didn't show, and an empty tail must not strand the poll at
+// a stale seq (server/test/events-api.test.ts pins this distinction).
+export function maxEventSeq(db: Database): number {
+  const row = db.prepare("SELECT MAX(seq) AS m FROM events").get() as {
+    m: number | null;
+  };
+  return row.m ?? 0;
 }
 
 function mapEventRow(row: EventRow): BoardEvent {

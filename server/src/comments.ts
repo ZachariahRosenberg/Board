@@ -21,6 +21,7 @@ import {
   StoreError,
   VersionNotFound,
 } from "./store.ts";
+import { countSubscribersByBoard } from "./webhooks.ts";
 
 export class InvalidAnchor extends StoreError {
   constructor(message: string) {
@@ -448,15 +449,20 @@ export function listCommentsPage(
 
 export interface BoardWithCommentCounts extends Board {
   unresolved_comments: number;
+  subscriber_count: number;
 }
 
-// The board list with unresolved root-comment counts attached (docs/plan.md
-// REST API) — shared by REST GET /boards and MCP board_list; the M7 audit
-// view is the planned third consumer (same rationale as listCommentsPage).
+// The board list with unresolved root-comment counts + live subscriber
+// counts attached (docs/plan.md REST API — the "live subscriber count" claim
+// became true with the M7 audit work) — shared by REST GET /boards and MCP
+// board_list; the M7 audit view is the planned third consumer (same
+// rationale as listCommentsPage).
 export function boardsWithCounts(db: Database): BoardWithCommentCounts[] {
+  const subscribers = countSubscribersByBoard(db);
   return listBoards(db).map((board) => ({
     ...board,
     unresolved_comments: countUnresolvedRoots(db, board.id),
+    subscriber_count: subscribers.get(board.id) ?? 0,
   }));
 }
 

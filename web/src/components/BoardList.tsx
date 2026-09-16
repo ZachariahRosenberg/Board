@@ -40,36 +40,45 @@ export function BoardList() {
     );
   }
   return (
-    <div className="board-list">
-      {boards.map((board) => (
-        <a
-          key={board.id}
-          className={`board-card${board.status === "ended" ? " ended" : ""}`}
-          href={`#/boards/${board.id}`}
-        >
-          <div className="board-card-title">{board.title}</div>
-          <div className="board-card-meta">
-            <span className={`badge ${board.status}`}>{board.status}</span>
-            <span>v{board.current_version}</span>
-            <span>{board.created_by}</span>
-            <span>{formatDate(board.created_at)}</span>
-            {board.unresolved_comments > 0 && (
-              <span className="unresolved-count">
-                {board.unresolved_comments} unresolved
-              </span>
-            )}
-          </div>
-          {board.tags.length > 0 && (
-            <div className="board-card-tags">
-              {board.tags.map((tag) => (
-                <span key={tag} className="tag">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
+    <div className="board-list-view">
+      <header className="board-list-header">
+        <h1>boards</h1>
+        <a className="audit-link" href="#/audit">
+          audit
         </a>
-      ))}
+      </header>
+      <div className="board-list">
+        {boards.map((board) => (
+          <a
+            key={board.id}
+            className={`board-card${board.status === "ended" ? " ended" : ""}`}
+            href={`#/boards/${board.id}`}
+          >
+            <div className="board-card-title">{board.title}</div>
+            <div className="board-card-meta">
+              <span className={`badge ${board.status}`}>{board.status}</span>
+              <span>v{board.current_version}</span>
+              <span>{board.created_by}</span>
+              <span>{formatDate(board.created_at)}</span>
+              <span>{board.subscriber_count} subs</span>
+              {board.unresolved_comments > 0 && (
+                <span className="unresolved-count">
+                  {board.unresolved_comments} unresolved
+                </span>
+              )}
+            </div>
+            {board.tags.length > 0 && (
+              <div className="board-card-tags">
+                {board.tags.map((tag) => (
+                  <span key={tag} className="tag">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </a>
+        ))}
+      </div>
     </div>
   );
 }

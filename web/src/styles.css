@@ -190,13 +190,15 @@ body {
   font-size: 1.5em;
 }
 
-.back {
+.back,
+.audit-link {
   color: var(--fg-muted);
   text-decoration: none;
   font-size: 0.9em;
 }
 
-.back:hover {
+.back:hover,
+.audit-link:hover {
   color: var(--primary);
 }
 
@@ -750,4 +752,183 @@ body {
 .lightbox-stage img {
   max-width: 100%;
   display: block;
+}
+
+/* audit view (M7): third top-level surface — event log + sessions + tokens,
+   sharing the board view's two-column grid and sidebar chrome */
+.board-list-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.board-list-header h1 {
+  margin: 0;
+  font-size: 1.5em;
+}
+
+.audit-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 14px 16px;
+}
+
+.audit-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 16px;
+}
+
+.audit-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.audit-toolbar select,
+.audit-toolbar input {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--fg);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 0.85em;
+}
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.audit-table th {
+  text-align: left;
+  color: var(--fg-muted);
+  font-weight: 600;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.audit-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.session-id,
+.token-name {
+  font-family: var(--font-mono);
+}
+
+.badge.revoked {
+  color: var(--error);
+  border: 1px solid var(--error);
+}
+
+.badge.active {
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+.badge.unexchanged {
+  color: var(--warning);
+  border: 1px solid var(--warning);
+}
+
+.revoke-confirm {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--warning);
+  font-size: 0.9em;
+}
+
+.event-scroll {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.event-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.event-table th {
+  text-align: left;
+  color: var(--fg-muted);
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+
+.event-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.event-row {
+  cursor: pointer;
+}
+
+.event-row:hover {
+  background: var(--bg-subtle);
+}
+
+.event-seq {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+
+.event-board {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.event-type {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-muted);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+
+/* dead-letters (webhook.failed) pop red in the unfiltered view — M7 */
+.event-type.failed {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.event-payload-row td {
+  padding: 0 8px 10px;
+}
+
+.event-payload {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.load-more {
+  margin-top: 10px;
 }

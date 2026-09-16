@@ -73,6 +73,18 @@ export function installDom(): Window {
   return window;
 }
 
+// Audit-view poll tests need document.visibilityState to flip (the component
+// polls only while the tab is visible). happy-dom exposes it as a getter on
+// Document.prototype, so the seam redefines it on the document instance and
+// fires visibilitychange — the same signal the component listens for.
+export function setVisibilityState(state: "visible" | "hidden"): void {
+  Object.defineProperty(document, "visibilityState", {
+    value: state,
+    configurable: true,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 // Shared component-test harness: render into a fresh document container and
 // unmount everything on cleanup. Each test file calls this at its top level
 // and wires its own `afterEach(cleanup)` — hook registration must stay

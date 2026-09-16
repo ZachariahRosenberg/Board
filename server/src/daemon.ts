@@ -43,6 +43,7 @@ import {
 } from "./routes/route.ts";
 import { sessionRoutes } from "./routes/session.ts";
 import { streamRoute } from "./routes/stream.ts";
+import { tokenRoutes } from "./routes/tokens.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
 import {
   BoardEnded,
@@ -81,6 +82,7 @@ const routes: Route[] = [
   ...eventRoutes,
   ...webhookRoutes,
   ...assetRoutes,
+  ...tokenRoutes,
   streamRoute,
 ];
 
