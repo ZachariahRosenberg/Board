@@ -4,7 +4,8 @@ import { originUrlFor } from "../../../server/src/daemon.ts";
 import { createExchangeToken } from "../../../server/src/sessions.ts";
 import type { CommandIo } from "./token.ts";
 
-type OpenUrl = (url: string, io: CommandIo) => void;
+// The seam type is exported for `board up --open`'s injected recorder.
+export type OpenUrl = (url: string, io: CommandIo) => void;
 
 interface OpenCommandInput {
   db: Database;
@@ -30,7 +31,8 @@ function spawnXdgOpen(url: string): boolean {
   }
 }
 
-function defaultOpener(url: string, io: CommandIo): void {
+// The failure-downgrades-to-print opener, shared with `board up --open` (D20).
+export function defaultOpener(url: string, io: CommandIo): void {
   if (!spawnXdgOpen(url)) {
     io.stderr("board: xdg-open failed; open the printed URL in a browser");
   }

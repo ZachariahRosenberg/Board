@@ -8,6 +8,7 @@ import {
   parseInstallArgs,
   runInstallCommand,
 } from "./commands/install.ts";
+import { runInstancesCommand } from "./commands/instances.ts";
 import { runOpenCommand } from "./commands/open.ts";
 import { runServe } from "./commands/serve.ts";
 import { runStatusCommand } from "./commands/status.ts";
@@ -32,6 +33,11 @@ commands:
   export <id> [file]   save a board bundle as a zip (default <id>.zip)
   import <file>        recreate a board from a bundle under a fresh board id
   status <board id>    one board's health: status, version, unresolved comments
+  up [file]            spawn a session instance (temp data dir, random port);
+                       a file publishes as v1 and prints a one-time human link
+  down [id]            tear down a session instance ($BOARD_INSTANCE or id):
+                       end boards, keep zip keepsakes, purge temp data + env
+  instances            list session instances (live; --all closed; --prune stale)
 
 REST commands (list/status/export/import) authenticate with --token <token> or
 BOARD_TOKEN; mint one with: make token add cli
@@ -131,6 +137,17 @@ export async function main(argv: string[]): Promise<number> {
             io: consoleIo(),
           }));
     }
+    case "up":
+    case "down":
+    case "instances":
+      // Session instances (D20): the spawn helper touches an instance's OWN
+      // temp db (mint-before-spawn, exchange-token mint) — the sanctioned
+      // local-db exception; the shared ~/.board is only read for the registry.
+      return await runInstancesCommand(command, {
+        config: loadConfig(),
+        argv: rest,
+        io: consoleIo(),
+      });
     default:
       console.error(`board: unknown command "${command}"`);
       console.error(USAGE);
