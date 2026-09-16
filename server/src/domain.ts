@@ -117,8 +117,9 @@ export interface BoardEvent {
 export type SubscriberKind = "sse" | "cursor" | "webhook";
 
 export interface Subscriber {
+  id: string | null;
   board_id: string;
-  agent: string;
+  principal: string;
   kind: SubscriberKind;
   webhook_url: string | null;
   last_seq: number;

@@ -1,4 +1,4 @@
-// MCP Streamable HTTP endpoint (M5-lite, D16): ten tools mapping 1:1 onto the
+// MCP Streamable HTTP endpoint (M5-lite, D16): eleven tools mapping 1:1 onto the
 // service layer — the same functions the REST routes call, so the event log
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
@@ -33,6 +33,7 @@ import {
   VersionConflict,
 } from "./store.ts";
 import { verifyToken } from "./tokens.ts";
+import { subscribeWebhook } from "./webhooks.ts";
 
 const MCP_SERVER_NAME = "board";
 const MCP_SERVER_VERSION = "0.5.0";
@@ -294,6 +295,29 @@ function registerBoardTools(
     },
     ({ board_id }) =>
       run(() => textResult(endBoard(db, dataDir, board_id, actor.name))),
+  );
+
+  server.registerTool(
+    "board_subscribe",
+    {
+      description:
+        "Register a webhook URL that receives signed board events as they are appended; re-subscribing replaces the previous URL.",
+      inputSchema: {
+        board_id: z.string(),
+        webhook_url: z.string(),
+        webhook_secret: z.string().optional(),
+      },
+    },
+    ({ board_id, webhook_url, webhook_secret }) =>
+      run(() =>
+        textResult(
+          subscribeWebhook(db, dataDir, board_id, {
+            webhook_url,
+            webhook_secret,
+            actor: actor.name,
+          }),
+        ),
+      ),
   );
 
   server.registerTool(

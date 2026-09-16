@@ -5,6 +5,7 @@ import { requireAuth } from "./auth.ts";
 import { CommentNotFound, InvalidAnchor } from "./comments.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
+import { onEvent } from "./events.ts";
 import {
   assertAllowedHost,
   HttpError,
@@ -28,6 +29,7 @@ import {
 } from "./routes/route.ts";
 import { sessionRoutes } from "./routes/session.ts";
 import { streamRoute } from "./routes/stream.ts";
+import { webhookRoutes } from "./routes/webhooks.ts";
 import {
   BoardEnded,
   BoardNotFound,
@@ -35,6 +37,12 @@ import {
   VersionConflict,
   VersionNotFound,
 } from "./store.ts";
+import {
+  type DispatcherOptions,
+  InvalidWebhookUrl,
+  SubscriptionNotFound,
+  startWebhookDispatcher,
+} from "./webhooks.ts";
 
 interface Daemon {
   hostServer: Bun.Server<undefined>;
@@ -47,6 +55,8 @@ interface DaemonOptions {
   // Where resolveWebDist starts walking to find the repo root; the test seam
   // for pointing the daemon at a fixture web/dist.
   webRootHint?: string;
+  // Webhook dispatcher knobs (test seam for the retry backoff).
+  webhook?: DispatcherOptions;
 }
 
 const routes: Route[] = [
@@ -55,6 +65,7 @@ const routes: Route[] = [
   ...boardRoutes,
   ...commentRoutes,
   ...eventRoutes,
+  ...webhookRoutes,
   streamRoute,
 ];
 
@@ -268,6 +279,12 @@ function errorResponse(
   if (err instanceof ContentTooLarge) {
     return jsonError(413, "payload_too_large", err.message, headers);
   }
+  if (err instanceof InvalidWebhookUrl) {
+    return jsonError(400, "invalid_webhook_url", err.message, headers);
+  }
+  if (err instanceof SubscriptionNotFound) {
+    return jsonError(404, "subscription_not_found", err.message, headers);
+  }
   console.error("boardd: unhandled error", err);
   return jsonError(500, "internal_error", "internal error", headers);
 }
@@ -428,6 +445,14 @@ function boundPort(server: Bun.Server<undefined>): number {
 
 export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
   const db = openDb(config.dataDir);
+  // Webhook dispatcher: fire-and-forget off the event bus — event appends and
+  // request handling never wait on deliveries (docs/architecture.md).
+  const dispatchWebhooks = startWebhookDispatcher(
+    db,
+    config.dataDir,
+    opts.webhook,
+  );
+  const offDispatch = onEvent(dispatchWebhooks);
   // Vendored pinned libs for board scripts (D18: they run in the app origin
   // and load /libs/* root-relative). Missing dir just 404s at serve time.
   const libsDir = join(resolveRepoRoot(opts.webRootHint), "server", "libs");
@@ -450,6 +475,7 @@ export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
         ),
     });
   } catch (err) {
+    offDispatch();
     db.close();
     throw err;
   }
@@ -458,6 +484,7 @@ export function startDaemon(config: Config, opts: DaemonOptions = {}): Daemon {
     hostUrl: originUrlFor(config.host, boundPort(hostServer)),
     db,
     stop: async () => {
+      offDispatch();
       await hostServer.stop(true);
       db.close();
     },

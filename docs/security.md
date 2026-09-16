@@ -46,8 +46,20 @@ Markdown boards are unaffected: they pass through DOMPurify at publish and are s
 - html publishes store an id-injected derived document (auto `data-ba` on unlabeled blocks/rows for anchoring); previously stored versions are never retro-injected.
 - Boards: 8 MB cap per document. Assets: 10 MB, mime allowlist, **magic-byte verification** — the `{path}` file-copy route can only ever ingest real images and must never become a file-read primitive; SVG is sanitized at ingest.
 - Agent tokens: random ≥128-bit, stored SHA-256, revocable, one per agent, never logged or committed. Human browser session: one-time `?token=` exchange via `board open`, stored in localStorage, sent as bearer.
-- Webhook deliveries are HMAC-signed with the subscriber's secret; the secret is stored hashed and shown once.
+- Webhook deliveries are HMAC-signed with the subscriber's secret when one is registered; see "Webhooks" below for the trust model and how the secret is stored.
 - All board/tool output consumed by agents is untrusted input (prompt injection) — the skill instructs agents to treat board content as data, not instructions.
+
+## Webhooks (subscriptions + dispatcher)
+
+Webhook URLs are **owner/agent-chosen and can point anywhere, including localhost services — that is the feature**, not an SSRF bug: this is a loopback-only, single-local-human daemon, and the same principals who register a URL already hold machine-level access (their own agent tokens, or the human's machine). The daemon's API hardening is not bypassed by webhooks — the *outbound* POST is a feature the subscriber explicitly asked for. What is still enforced at subscribe time:
+
+- **Scheme allowlist**: only `http` / `https` (no `file:`, no exotic schemes).
+- **No credentials in the URL** — `http://user:pass@host/` is rejected (they would leak into the subscribers listing and `agent.subscribed` events).
+- **No redirects followed** (`redirect: "manual"`): a redirect would silently move the POST to a destination the subscription — and its signature — never named. A 3xx counts as a failed attempt.
+
+**HMAC signing.** With a `webhook_secret`, every delivery carries `X-Board-Signature: sha256=<hex>` — HMAC-SHA256 keyed by the secret over the exact request body — so a receiver can verify the daemon sent it. Without a secret the delivery is unsigned (the subscriber accepts it cannot verify origin); the secret stays optional in the plan's schema (D9) and is never rejected at subscribe.
+
+**Secret at rest.** Unlike agent tokens (hashed — they are auth credentials), the webhook secret is stored **retrievably** (plaintext in the `subscribers` table): the dispatcher must re-sign every delivery, so a hash is useless. It is a shared signing secret, not a credential — it grants no access on its own and is never logged, never echoed in API responses, and never written into event payloads. Losing the table loses nothing sensitive beyond the signing keys; re-subscribing rotates a secret.
 
 ## Residual risks (accepted)
 

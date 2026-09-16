@@ -35,6 +35,7 @@ description: Publish plans and results to the shared board for async human revie
 | `board_restore` | rolls the board back to a prior version | board_id, version |
 | `board_end` | closes the board's review loop | board_id |
 | `board_status` | daemon liveness + counts | — |
+| `board_subscribe` | registers a webhook for signed event push | board_id, webhook_url, webhook_secret? |
 
 ## Consumption rule — exactly one
 

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { makeConfig } from "../src/config.ts";
 import { startDaemon } from "../src/daemon.ts";
 import { createToken } from "../src/tokens.ts";
+import type { DispatcherOptions } from "../src/webhooks.ts";
 
 export interface RequestOptions {
   token?: string;
@@ -75,6 +76,8 @@ export interface TestServerOptions {
   // Passed through to startDaemon as the resolveWebDist hint: point static
   // serving at a fixture web/dist tree.
   webRootHint?: string;
+  // Webhook dispatcher knobs (retry backoff injection for tests).
+  webhook?: DispatcherOptions;
 }
 
 // Tests never touch the real ~/.board (invariant in AGENTS.md) — always a fresh temp BOARD_DATA_DIR.
@@ -85,7 +88,10 @@ export function startTestServer(options: TestServerOptions = {}): TestServer {
     BOARD_HOST: "127.0.0.1",
     BOARD_PORT: "0",
   });
-  const daemon = startDaemon(config, { webRootHint: options.webRootHint });
+  const daemon = startDaemon(config, {
+    webRootHint: options.webRootHint,
+    webhook: options.webhook,
+  });
   return {
     dataDir,
     db: daemon.db,

@@ -102,6 +102,14 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
       ALTER TABLE comments ADD COLUMN seq INTEGER;
     `,
   },
+  {
+    version: 4,
+    sql: `
+      -- subscribers.id: stable subscription-record id for the webhook registry
+      -- (docs/plan.md "Subscriptions, callbacks & presence"); sse/cursor rows stay null.
+      ALTER TABLE subscribers ADD COLUMN id TEXT;
+    `,
+  },
 ];
 
 export function openDb(dataDir: string): Database {
