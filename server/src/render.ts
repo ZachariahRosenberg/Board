@@ -173,6 +173,23 @@ const MATH_RE = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
 const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 const CODE_HIGHLIGHT_THEME = "github-light";
 
+// GFM task lists render `<input type="checkbox" disabled>` — honest markup for
+// a published snapshot (boards are static versions, docs/plan.md), but nothing
+// tells the reader why clicking does nothing. The muted/inert look is CSS
+// (web/src/styles.css, scoped to markdown boards); the title is the one hint
+// CSS cannot carry, so it is added here — AFTER sanitize, on already-sanitized
+// nodes only, never by widening the sanitizer profile (invariant 5).
+// Deliberately NOT applied to html boards (renderHtmlDocument): D18 scripts
+// make their checkboxes genuinely interactive.
+export const TASK_LIST_CHECKBOX_TITLE =
+  "boards are published snapshots — comment instead";
+
+function annotateTaskListCheckboxes(body: Element): void {
+  for (const input of [...body.querySelectorAll('input[type="checkbox"]')]) {
+    input.setAttribute("title", TASK_LIST_CHECKBOX_TITLE);
+  }
+}
+
 interface RenderedDocument {
   html: string;
   anchors: ExtractedAnchor[];
@@ -191,6 +208,7 @@ export async function renderMarkdownDocument(
   convertMermaidBlocks(doc, body);
   renderMath(doc, body);
   await highlightCodeBlocks(doc, body);
+  annotateTaskListCheckboxes(body);
   injectAnchorIds(body, false);
   return {
     html: wrapDocument(body.innerHTML),

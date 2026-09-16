@@ -8,6 +8,11 @@ import type {
   Version,
   VersionMeta,
 } from "../../../server/src/domain.ts";
+import {
+  renderHtmlDocument,
+  renderMarkdownDocument,
+  TASK_LIST_CHECKBOX_TITLE,
+} from "../../../server/src/render.ts";
 import type { CreateCommentInput } from "../api.ts";
 import { installDom, StubEventSource } from "../test-dom.ts";
 import { clearSessionToken, setSessionToken } from "../token.ts";
@@ -386,6 +391,21 @@ describe("BoardView", () => {
     await act(async () => {});
     expect(container.querySelector("iframe")).toBe(null);
     expect(container.querySelector("div.board-content")).not.toBe(null);
+  });
+
+  test("board content carries the board format class", async () => {
+    // snapshot-only styling (muted markdown task-list checkboxes) must never
+    // reach html boards, whose checkboxes may be interactive (D18)
+    const md = render(<BoardView id="b1" />);
+    await act(async () => {});
+    expect(
+      md.querySelector("div.board-content")?.classList.contains("markdown"),
+    ).toBe(true);
+    const html = render(<BoardView id="b-html" />);
+    await act(async () => {});
+    expect(
+      html.querySelector("div.board-content")?.classList.contains("html"),
+    ).toBe(true);
   });
 
   test("switching versions remounts the html document in place", async () => {
@@ -1101,7 +1121,69 @@ describe("CommentSidebar image upload", () => {
     });
     expect(container.innerHTML).toContain("asset type not allowed");
     expect(container.querySelector(".overlay-editor")).toBe(null);
+    // a failed upload opens no editor and never stages a local blob: preview
+    // (the host CSP is img-src 'self' data: — blob: could never render)
+    expect(container.innerHTML).not.toContain("blob:");
+    expect(container.querySelector(".overlay-editor-stage img")).toBe(null);
     uploadAssetError = null;
+  });
+
+  test("image-anchored thread renders a thumbnail from the served asset URL", async () => {
+    // dogfooded: the thread chip was a bare text label — nothing confirmed
+    // the attachment existed. The thumb rides the same /assets/<id> URL the
+    // board uses (CSP img-src 'self'), on the thread root's image anchor.
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={null}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const thumbs = [
+      ...container.querySelectorAll("img.comment-image-thumb"),
+    ] as HTMLImageElement[];
+    expect(thumbs).toHaveLength(1);
+    expect(thumbs[0].getAttribute("src")).toBe("/assets/assetImg01");
+    expect(thumbs[0].getAttribute("src")).not.toContain("blob:");
+    // it belongs to the image-anchored thread, not the text ones
+    expect(thumbs[0].closest(".thread")?.textContent).toContain(
+      "The arrow points at the regression.",
+    );
+  });
+
+  test("composer with a pending image anchor previews the held image", async () => {
+    const container = render(
+      <CommentSidebar
+        boardId="b1"
+        boardStatus="open"
+        versionN={2}
+        refreshKey={0}
+        pendingAnchor={IMAGE_ANCHOR}
+        onPendingAnchorConsumed={() => {}}
+        onCommentsChange={() => {}}
+        onImageHover={() => {}}
+        onHighlight={() => {}}
+        onSwitchVersion={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const composer = container.querySelector("div.composer");
+    expect(composer).not.toBe(null);
+    const thumb = composer?.querySelector(
+      "img.comment-image-thumb",
+    ) as HTMLImageElement;
+    expect(thumb).not.toBe(null);
+    expect(thumb.getAttribute("src")).toBe("/assets/assetImg01");
+    // the annotate affordance stays next to the preview
+    expect(composer?.innerHTML).toContain("annotate");
   });
 });
 
@@ -1187,5 +1269,39 @@ describe("BoardView image annotation", () => {
     });
     const img = container.querySelector(".image-anchor-wrap img");
     expect(img?.classList.contains("anchor-target")).toBe(true);
+  });
+});
+
+describe("markdown task-list checkboxes (static snapshot affordance)", () => {
+  // the render pipeline is the implementation of the checkbox affordance
+  // (marked GFM → DOMPurify → title injection in server/src/render.ts); the
+  // muted/inert LOOK is CSS (styles.css, scoped to .board-content.markdown).
+  // These assert the DOM attributes/structure the CSS keys off.
+  test("GFM task lists render disabled checkboxes carrying the snapshot title", async () => {
+    const { html } = await renderMarkdownDocument(
+      "- [ ] unchecked thing\n- [x] checked thing\n",
+    );
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const boxes = [
+      ...doc.querySelectorAll('input[type="checkbox"]'),
+    ] as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    // static by design: marked renders disabled and DOMPurify keeps it —
+    // the box can never actually toggle
+    for (const box of boxes) {
+      expect(box.hasAttribute("disabled")).toBe(true);
+      expect(box.getAttribute("title")).toBe(TASK_LIST_CHECKBOX_TITLE);
+    }
+    // `- [x]` state survives the pipeline
+    expect(boxes[0].hasAttribute("checked")).toBe(false);
+    expect(boxes[1].hasAttribute("checked")).toBe(true);
+  });
+
+  test("html boards get no snapshot title — their checkboxes may be interactive (D18)", () => {
+    const { html } = renderHtmlDocument(
+      '<body><form><input type="checkbox"></form></body>',
+    );
+    expect(html).not.toContain(TASK_LIST_CHECKBOX_TITLE);
+    expect(html).toContain('type="checkbox"');
   });
 });

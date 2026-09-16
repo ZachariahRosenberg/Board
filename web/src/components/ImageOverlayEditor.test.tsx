@@ -88,6 +88,22 @@ function dragArrow(
 }
 
 describe("ImageOverlayEditor", () => {
+  test("previews the served asset URL — no blob: URLs anywhere in the rendered tree", () => {
+    // the host CSP is img-src 'self' data: — a blob: preview could never
+    // render (and the CSP must never widen, invariant 2). The editor opens
+    // only after the upload resolves, so the served /assets/<id> URL is the
+    // one and only preview source.
+    const container = openEditor(
+      () => {},
+      () => {},
+    );
+    const img = container.querySelector(
+      ".overlay-editor-stage img",
+    ) as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("/assets/assetImg01");
+    expect(container.innerHTML).not.toContain("blob:");
+  });
+
   test("arrow tool: press-drag-release produces the plan schema in normalized coords", () => {
     const done: ImageOverlay[] = [];
     const container = openEditor(

@@ -321,15 +321,25 @@ export function CommentSidebar(props: CommentSidebarProps) {
             </blockquote>
           )}
           {pendingImage !== null && (
-            <button
-              type="button"
-              className="pill"
-              onClick={() => {
-                setEditor({ assetId: pendingImage.asset_id });
-              }}
-            >
-              annotate
-            </button>
+            <>
+              {/* visual confirmation the attachment is held (dogfooded:
+                  "I thought I attached an image, but I don't see it?") */}
+              <img
+                className="comment-image-thumb"
+                src={`/assets/${pendingImage.asset_id}`}
+                alt=""
+                draggable={false}
+              />
+              <button
+                type="button"
+                className="pill"
+                onClick={() => {
+                  setEditor({ assetId: pendingImage.asset_id });
+                }}
+              >
+                annotate
+              </button>
+            </>
           )}
           <textarea
             key={composerKey}
@@ -428,6 +438,17 @@ function ThreadView(props: ThreadViewProps) {
   const imageAnchor = root.anchor.type === "image" ? root.anchor : null;
   return (
     <div className={`thread${root.resolved_at !== null ? " resolved" : ""}`}>
+      {imageAnchor !== null && (
+        // purely a visual confirmation of the attachment — the chip button
+        // below keeps the hover-preview (a11y: pointer-only affordances stay
+        // on interactive elements) and the click-to-highlight
+        <img
+          className="comment-image-thumb"
+          src={`/assets/${imageAnchor.asset_id}`}
+          alt=""
+          draggable={false}
+        />
+      )}
       <button
         type="button"
         className="anchor-chip clickable"

@@ -409,7 +409,10 @@ export function BoardView({ id }: { id: string }) {
           ) : (
             <div
               ref={containerRef}
-              className="board-content"
+              // the format class scopes snapshot-only styling (e.g. muted
+              // markdown task-list checkboxes) away from html boards, whose
+              // checkboxes may be genuinely interactive (D18 scripts run)
+              className={`board-content ${board.format}`}
               // biome-ignore lint/security/noDangerouslySetInnerHtml: the sanctioned host-chrome display mode — markdown content is sanitized server-side at publish and script-free by construction (invariant 6, docs/security.md "Content rules"); html boards mount through mountBoardDocument instead (D18)
               dangerouslySetInnerHTML={
                 board.format === "html"
