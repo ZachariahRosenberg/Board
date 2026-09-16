@@ -3,6 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Config } from "../../../server/src/config.ts";
 import { openDb } from "../../../server/src/db.ts";
 import { verifyToken } from "../../../server/src/tokens.ts";
 import { type CommandIo, runTokenCommand } from "./token.ts";
@@ -16,10 +17,20 @@ afterAll(() => {
 });
 
 // Tests never touch the real ~/.board — always a fresh temp data dir (AGENTS.md).
-function freshDb(): Database {
+// The command opens its own db handle from the config (it may resolve an
+// instance's db instead); the tests' `db` handle is for row assertions.
+function freshDb(): { db: Database; config: Config } {
   const dir = mkdtempSync(join(tmpdir(), "board-cli-test-"));
   dirs.push(dir);
-  return openDb(dir);
+  return {
+    db: openDb(dir),
+    config: {
+      dataDir: dir,
+      host: "127.0.0.1",
+      port: 7800,
+      bind: ["127.0.0.1"],
+    },
+  };
 }
 
 interface Capture {
@@ -53,9 +64,9 @@ function findToken(lines: string[]): string | undefined {
 
 describe("board token add", () => {
   test("exits 0, prints the token exactly once, and warns it is unrecoverable", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const { out, err, io } = capture();
-    const code = runTokenCommand({ db, argv: ["add", "smoke-agent"], io });
+    const code = runTokenCommand({ config, argv: ["add", "smoke-agent"], io });
     expect(code).toBe(0);
     expect(err).toEqual([]);
     const text = out.join("\n");
@@ -72,13 +83,17 @@ describe("board token add", () => {
   });
 
   test("a duplicate name exits 1 on stderr without printing a token", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const first = capture();
-    expect(runTokenCommand({ db, argv: ["add", "alice"], io: first.io })).toBe(
-      0,
-    );
+    expect(
+      runTokenCommand({ config, argv: ["add", "alice"], io: first.io }),
+    ).toBe(0);
     const second = capture();
-    const code = runTokenCommand({ db, argv: ["add", "alice"], io: second.io });
+    const code = runTokenCommand({
+      config,
+      argv: ["add", "alice"],
+      io: second.io,
+    });
     expect(code).toBe(1);
     expect(second.err.join("\n")).toContain("alice");
     expect(second.err.join("\n")).toContain(
@@ -89,13 +104,15 @@ describe("board token add", () => {
   });
 
   test("--force on a taken name revokes it and mints under a suffixed name", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const first = capture();
-    expect(runTokenCommand({ db, argv: ["add", "cli"], io: first.io })).toBe(0);
+    expect(
+      runTokenCommand({ config, argv: ["add", "cli"], io: first.io }),
+    ).toBe(0);
     const oldToken = findToken(first.out) ?? "";
     const second = capture();
     const code = runTokenCommand({
-      db,
+      config,
       argv: ["add", "cli", "--force"],
       io: second.io,
     });
@@ -124,10 +141,10 @@ describe("board token add", () => {
   });
 
   test("--force on a free name mints under the exact name", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const cap = capture();
     const code = runTokenCommand({
-      db,
+      config,
       argv: ["add", "--force", "fresh"],
       io: cap.io,
     });
@@ -139,9 +156,9 @@ describe("board token add", () => {
   });
 
   test("a missing name prints usage and exits 1", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const { out, err, io } = capture();
-    const code = runTokenCommand({ db, argv: ["add"], io });
+    const code = runTokenCommand({ config, argv: ["add"], io });
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("usage");
     expect(out).toEqual([]);
@@ -151,14 +168,14 @@ describe("board token add", () => {
 
 describe("board token list", () => {
   test("renders an aligned table with names, timestamps, and revoked state", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const add = capture();
-    runTokenCommand({ db, argv: ["add", "alpha"], io: add.io });
-    runTokenCommand({ db, argv: ["add", "beta"], io: capture().io });
+    runTokenCommand({ config, argv: ["add", "alpha"], io: add.io });
+    runTokenCommand({ config, argv: ["add", "beta"], io: capture().io });
     verifyToken(db, findToken(add.out) ?? "");
 
     const { out, err, io } = capture();
-    const code = runTokenCommand({ db, argv: ["list"], io });
+    const code = runTokenCommand({ config, argv: ["list"], io });
     expect(code).toBe(0);
     expect(err).toEqual([]);
     const header = out[0] ?? "";
@@ -176,9 +193,9 @@ describe("board token list", () => {
     expect((alphaRow ?? "").indexOf("20")).toBe(header.indexOf("CREATED"));
     expect((betaRow ?? "").indexOf("20")).toBe(header.indexOf("CREATED"));
 
-    runTokenCommand({ db, argv: ["revoke", "beta"], io: capture().io });
+    runTokenCommand({ config, argv: ["revoke", "beta"], io: capture().io });
     const afterRevoke = capture();
-    runTokenCommand({ db, argv: ["list"], io: afterRevoke.io });
+    runTokenCommand({ config, argv: ["list"], io: afterRevoke.io });
     const betaAfter = afterRevoke.out.find((line) => line.startsWith("beta"));
     expect(betaAfter ?? "").toContain("yes");
 
@@ -195,9 +212,9 @@ describe("board token list", () => {
   });
 
   test("reports when there are no tokens yet", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const { out, io } = capture();
-    expect(runTokenCommand({ db, argv: ["list"], io })).toBe(0);
+    expect(runTokenCommand({ config, argv: ["list"], io })).toBe(0);
     expect(out.join("\n")).toContain("no tokens");
     db.close();
   });
@@ -205,12 +222,12 @@ describe("board token list", () => {
 
 describe("board token revoke", () => {
   test("confirms revocation and the token stops verifying", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const add = capture();
-    runTokenCommand({ db, argv: ["add", "gamma"], io: add.io });
+    runTokenCommand({ config, argv: ["add", "gamma"], io: add.io });
     const token = findToken(add.out) ?? "";
     const { out, err, io } = capture();
-    const code = runTokenCommand({ db, argv: ["revoke", "gamma"], io });
+    const code = runTokenCommand({ config, argv: ["revoke", "gamma"], io });
     expect(code).toBe(0);
     expect(err).toEqual([]);
     expect(out.join("\n")).toContain("gamma");
@@ -219,9 +236,9 @@ describe("board token revoke", () => {
   });
 
   test("an unknown name exits 1 on stderr", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     const { out, err, io } = capture();
-    const code = runTokenCommand({ db, argv: ["revoke", "nobody"], io });
+    const code = runTokenCommand({ config, argv: ["revoke", "nobody"], io });
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("nobody");
     expect(out).toEqual([]);
@@ -231,10 +248,10 @@ describe("board token revoke", () => {
 
 describe("board token dispatch", () => {
   test("a missing or unknown subcommand prints usage and exits 1", () => {
-    const db = freshDb();
+    const { db, config } = freshDb();
     for (const argv of [[], ["frobnicate"]]) {
       const { err, io } = capture();
-      expect(runTokenCommand({ db, argv, io })).toBe(1);
+      expect(runTokenCommand({ config, argv, io })).toBe(1);
       expect(err.join("\n")).toContain("usage");
     }
     db.close();

@@ -1,16 +1,27 @@
-// M7 final smoke (docs/plan.md "Milestones" — "full smoke: two simulated agents
-// + human comments → async feedback consumed via cursor and webhook"). One
-// command, full loop, self-verifying: boots a throwaway daemon on a temp
-// BOARD_DATA_DIR + scratch ports (never the real ~/.board or :7800 — AGENTS.md
-// invariant), walks the feedback-grammar loop (docs/feedback-grammar.md) as
-// three principals, asserts every step, prints SMOKE PASS/FAIL, exits 0/1.
+// M7 final smoke + M8 session wave (docs/plan.md "Milestones"): one command,
+// full loop, self-verifying. Steps 1–15 walk the feedback-grammar loop
+// (docs/feedback-grammar.md) as three principals against a throwaway daemon;
+// steps 16–19 drive the D20 session-instance loop the way an agent does —
+// through the real CLI (`board up` → REST iterate → `board instances` →
+// `board down`) with BOARD_DATA_DIR pointed at this smoke's temp registry.
+// Temp data dir + scratch ports throughout (never the real ~/.board or :7800
+// — AGENTS.md invariant); asserts every step; prints SMOKE PASS/FAIL, exits
+// 0/1.
 //
 // Run: bun scripts/smoke.ts (or `make smoke`).
 
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  type InstancePaths,
+  instancePaths,
+  readEnvToken,
+  readInstanceEntry,
+  spawnInstance,
+  teardownInstance,
+} from "../cli/src/instances.ts";
 import { openDb } from "../server/src/db.ts";
 import type {
   Board,
@@ -20,7 +31,6 @@ import type {
   VersionMeta,
 } from "../server/src/domain.ts";
 import { createExchangeToken } from "../server/src/sessions.ts";
-import { createToken } from "../server/src/tokens.ts";
 
 // Receiver-side verification of the `X-Board-Signature` webhook header — the
 // exact recipe from docs/feedback-grammar.md ("Webhook consumption"): HMAC-
@@ -118,64 +128,11 @@ function startReceiver(secret: string): {
   };
 }
 
-async function drain(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): Promise<void> {
-  try {
-    for (;;) {
-      const { done } = await reader.read();
-      if (done) {
-        return;
-      }
-    }
-  } catch {
-    // the pipe dies with the process — nothing to drain anymore
-  }
-}
-
-// Read the daemon's stdout until the listen line (the readiness seam the
-// daemon subprocess test in cli/src/main.test.ts uses), returning its URL.
-// Every read is raced against the deadline so a daemon that dies mid-boot
-// fails the smoke with a message instead of hanging the script.
-async function readListenLine(
-  proc: { stdout: ReadableStream<Uint8Array> },
-  timeoutMs: number,
-): Promise<string> {
-  const reader = proc.stdout.getReader();
-  const decoder = new TextDecoder();
-  const deadline = Date.now() + timeoutMs;
-  let out = "";
-  for (;;) {
-    const match = /board: host app listening on (http:\S+)/.exec(out);
-    if (match !== null) {
-      // Drain the rest in the background: nothing more is printed on the
-      // happy path, but an unread pipe could eventually block the daemon.
-      void drain(reader);
-      return match[1] ?? "";
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw new Error(
-        `daemon not ready after ${timeoutMs}ms; stdout so far: ${out.trim() || "(none)"}`,
-      );
-    }
-    const chunk = await Promise.race([
-      reader.read(),
-      sleep(remaining).then(() => null),
-    ]);
-    if (chunk === null) {
-      throw new Error(
-        `daemon not ready after ${timeoutMs}ms; stdout so far: ${out.trim() || "(none)"}`,
-      );
-    }
-    if (chunk.done) {
-      throw new Error(
-        `daemon exited before becoming ready; stdout: ${out.trim() || "(none)"}`,
-      );
-    }
-    out += decoder.decode(chunk.value, { stream: true });
-  }
-}
+// The daemon's stdout/stderr readiness seam (readListenLine + the stderr
+// tail collector it fed) is GONE as of the wave-2 refactor: the daemon is
+// spawned by cli/src/instances.ts's spawnInstance, whose waitForListenLine
+// matches the SAME hoisted LISTEN_LINE pattern from server/src/main.ts, and
+// both streams land in the registry's daemon.log for the FAIL path.
 
 const V1_MD = [
   "# Release plan",
@@ -194,6 +151,67 @@ const V2_MD = V1_MD.replace(
   "The rollout overlaps the migration — ops signed off in the resolved thread.",
 );
 
+// The session wave's fixture (steps 16–19): a small markdown file, published
+// as v1 by `board up` and iterated to v2 over REST.
+const SESSION_MD = [
+  "# Session review",
+  "",
+  "## Ship criteria",
+  "",
+  "The board loop needs a human sign-off before merge.",
+  "",
+].join("\n");
+
+const SESSION_MD_V2 = SESSION_MD.replace(
+  "needs a human sign-off",
+  "got the human sign-off",
+);
+
+// The `board up` output contract (the same lines cli/src/instances.test.ts
+// parses): id/url/token/env/human-link, plus the board id from the link.
+interface InstanceUp {
+  id: string;
+  url: string;
+  token: string;
+  envPath: string;
+  human: string;
+  boardId: string;
+}
+
+function parseInstanceUp(stdout: string): InstanceUp {
+  const head =
+    /instance (s-[0-9A-Za-z]{10}) listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(
+      stdout,
+    );
+  const token =
+    /^agent token \(print once — it is not recoverable\): (\S+)$/m.exec(
+      stdout,
+    )?.[1];
+  const envPath =
+    /^credentials env file \(agent shells: source it\): (.+)$/m.exec(
+      stdout,
+    )?.[1];
+  const human = /^human link: (.+)$/m.exec(stdout)?.[1];
+  const boardId = /#\/boards\/([0-9A-Za-z]{10})/.exec(human ?? "")?.[1];
+  if (
+    head === null ||
+    token === undefined ||
+    envPath === undefined ||
+    human === undefined ||
+    boardId === undefined
+  ) {
+    throw new Error(`could not parse board up output:\n${stdout}`);
+  }
+  return {
+    id: head[1] ?? "",
+    url: head[2] ?? "",
+    token,
+    envPath,
+    human,
+    boardId,
+  };
+}
+
 function payloadId(ev: BoardEvent | null | undefined, key: string): string {
   const value = ev?.payload[key];
   return typeof value === "string" ? value : "";
@@ -203,62 +221,18 @@ async function run(): Promise<0 | 1> {
   const dataDir = mkdtempSync(join(tmpdir(), "board-smoke-"));
   console.log(`board smoke: temp data dir ${dataDir}`);
 
-  // Mint-before-spawn: the temp db is opened, seeded, and CLOSED in-process
-  // BEFORE the daemon ever opens it — the smoke is the only writer, so there
-  // is no WAL race to reason about (and no bootstrap step spawning anything).
-  // Plaintext tokens exist only in this process's memory; at rest they are
-  // SHA-256 hashes (invariant 8, docs/security.md).
-  const db = openDb(dataDir);
-  const alpha = createToken(db, { name: "smoke-alpha" });
-  const beta = createToken(db, { name: "smoke-beta" });
-  const exchange = createExchangeToken(db);
-  db.close();
-
-  // Scratch ports end to end: BOARD_PORT=0 lets the daemon bind an ephemeral
-  // port and print it (the value read back from the listen line below); env
-  // names per server/src/config.ts. BOARD_BIND is pinned so an inherited
-  // BOARD_BIND from the operator's shell can never widen the bind list.
-  const proc = Bun.spawn(
-    [process.execPath, join(import.meta.dir, "..", "server", "src", "main.ts")],
-    {
-      env: {
-        ...process.env,
-        BOARD_DATA_DIR: dataDir,
-        BOARD_HOST: "127.0.0.1",
-        BOARD_PORT: "0",
-        BOARD_BIND: "127.0.0.1",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-
-  // Daemon stderr is kept (tail only) purely as the FAIL-path debugging aid.
-  let daemonStderr = "";
-  void (async () => {
-    const reader = proc.stderr.getReader();
-    const decoder = new TextDecoder();
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-          return;
-        }
-        daemonStderr = (
-          daemonStderr + decoder.decode(value, { stream: true })
-        ).slice(-4000);
-      }
-    } catch {
-      // dies with the process
-    }
-  })();
-
   // The subscriber picks its secret (docs/feedback-grammar.md); a fixed value
   // keeps runs reproducible and the receiver's verification honest.
   const secret = "smoke-webhook-secret";
   const receiver = startReceiver(secret);
 
   let baseUrl = "";
+  let spawned: Awaited<ReturnType<typeof spawnInstance>> | undefined;
+  let smokePaths: InstancePaths | undefined;
+  // The CLI-spawned session instance (steps 16–19) — its id is all the
+  // finally-block needs to find the registry entry and, if the smoke died
+  // before `board down`, tear it down itself.
+  let sessionId: string | undefined;
   let lastResponse: { status: number; body: string } | undefined;
   let stepNo = 0;
   let stepLabel = "";
@@ -286,6 +260,40 @@ async function run(): Promise<0 | 1> {
     const result = { status: res.status, body: await res.text() };
     lastResponse = result;
     return result;
+  }
+
+  // Run the real CLI as a subprocess (the agent's-eye view for the session
+  // wave): the operator's BOARD_INSTANCE/BOARD_TOKEN must not leak into the
+  // smoke's targeting or credentials, and BOARD_DATA_DIR pins the registry to
+  // this smoke's temp dir.
+  async function cli(args: string[]): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) {
+        env[k] = v;
+      }
+    }
+    env.BOARD_DATA_DIR = dataDir;
+    delete env.BOARD_INSTANCE;
+    delete env.BOARD_TOKEN;
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "..", "cli", "src", "main.ts"),
+        ...args,
+      ],
+      { env, stdout: "pipe", stderr: "pipe" },
+    );
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    return { code: code ?? -1, stdout, stderr };
   }
 
   function json<T>(res: { body: string }): T {
@@ -327,10 +335,39 @@ async function run(): Promise<0 | 1> {
   }
 
   try {
-    baseUrl = await readListenLine(proc, 15_000);
+    // The spawn refactor (wave 2): the hand-rolled mint + Bun.spawn +
+    // readListenLine above is gone — spawnInstance is the ONE spawn path,
+    // shared with `board up`. Same guarantees, one implementation: OS-temp
+    // data dir, kernel-assigned port (scratch ports end to end), loopback
+    // bind + Host allowlist pinned over inherited env, mint-before-spawn —
+    // both agent tokens minted in the SAME pre-spawn db session (one
+    // open/close window, no boot-time WAL race). [D20]
+    spawned = await spawnInstance({
+      registryDataDir: dataDir,
+      agentTokenName: "smoke-alpha",
+      extraAgentTokenNames: ["smoke-beta"],
+    });
+    smokePaths = instancePaths(dataDir, spawned.entry.id);
+    baseUrl = spawned.entry.url;
+    const alpha = spawned.token;
+    const beta = spawned.extraTokens[0] ?? "";
     console.log(
       `board smoke: daemon ${baseUrl}, webhook receiver ${receiver.url}`,
     );
+
+    // The exchange token cannot ride the pre-spawn db session (that session
+    // lives inside spawnInstance and mints agent tokens only), and there is
+    // no REST route for it by design (docs/api.md) — so it is minted
+    // post-health, direct on the live daemon's temp db: the same sanctioned
+    // local-db exception `board open --instance` rides (openDb's
+    // busy_timeout covers the concurrent live writer). [D20 wave 2]
+    const exDb = openDb(spawned.entry.dataDir);
+    let exchange = "";
+    try {
+      exchange = createExchangeToken(exDb);
+    } finally {
+      exDb.close();
+    }
 
     await step("daemon healthy", async () => {
       const res = await api("GET", "/api/health", undefined);
@@ -339,7 +376,7 @@ async function run(): Promise<0 | 1> {
     });
 
     const board = await step("board created (smoke-alpha)", async () => {
-      const res = await api("POST", "/api/boards", alpha.token, {
+      const res = await api("POST", "/api/boards", alpha, {
         title: "M7 smoke — release plan",
         format: "markdown",
       });
@@ -360,7 +397,7 @@ async function run(): Promise<0 | 1> {
         const res = await api(
           "POST",
           `/api/boards/${board.id}/publish`,
-          alpha.token,
+          alpha,
           {
             format: "markdown",
             content: V1_MD,
@@ -396,7 +433,7 @@ async function run(): Promise<0 | 1> {
         const res = await api(
           "POST",
           `/api/boards/${board.id}/subscribe`,
-          beta.token,
+          beta,
           { webhook_url: receiver.url, webhook_secret: secret },
         );
         expectStatus(res, 201, "beta subscribe");
@@ -483,7 +520,7 @@ async function run(): Promise<0 | 1> {
         const res = await api(
           "GET",
           `/api/boards/${board.id}/comments?since=0`,
-          alpha.token,
+          alpha,
         );
         expectStatus(res, 200, "cursor poll");
         const page = await json<{ comments: Comment[]; last_seq: number }>(res);
@@ -520,7 +557,7 @@ async function run(): Promise<0 | 1> {
         const res = await api(
           "POST",
           `/api/comments/${comment.id}/reply`,
-          alpha.token,
+          alpha,
           {
             body: "Waiting on the migration — re-publishing with the ordering fixed.",
           },
@@ -579,7 +616,7 @@ async function run(): Promise<0 | 1> {
         const nextRes = await api(
           "GET",
           `/api/boards/${board.id}/comments?since=${cursor}`,
-          alpha.token,
+          alpha,
         );
         expectStatus(nextRes, 200, "next cursor poll");
         const nextPage = await json<{ comments: Comment[]; last_seq: number }>(
@@ -597,7 +634,7 @@ async function run(): Promise<0 | 1> {
         const backRes = await api(
           "GET",
           `/api/boards/${board.id}/comments?since=0`,
-          alpha.token,
+          alpha,
         );
         expectStatus(backRes, 200, "catch-up poll");
         const back = await json<{ comments: Comment[]; last_seq: number }>(
@@ -659,11 +696,7 @@ async function run(): Promise<0 | 1> {
     });
 
     await step("audit trail: the whole chain in order", async () => {
-      const res = await api(
-        "GET",
-        `/api/events?board_id=${board.id}`,
-        alpha.token,
-      );
+      const res = await api("GET", `/api/events?board_id=${board.id}`, alpha);
       expectStatus(res, 200, "events");
       const log = await json<{ events: BoardEvent[]; last_seq: number }>(res);
       const types = log.events.map((e) => e.type);
@@ -695,7 +728,7 @@ async function run(): Promise<0 | 1> {
       const deadRes = await api(
         "GET",
         "/api/events?type=webhook.failed",
-        alpha.token,
+        alpha,
       );
       const dead = await json<{ events: BoardEvent[] }>(deadRes);
       assert(
@@ -710,7 +743,7 @@ async function run(): Promise<0 | 1> {
         const res = await api(
           "POST",
           `/api/boards/${board.id}/publish`,
-          alpha.token,
+          alpha,
           {
             format: "markdown",
             content: V2_MD,
@@ -722,11 +755,7 @@ async function run(): Promise<0 | 1> {
         expectStatus(res, 201, "publish v2");
         const v2 = await json<Version>(res);
         assert(v2.n === 2, `expected version 2, got n=${v2.n}`);
-        const boardRes = await api(
-          "GET",
-          `/api/boards/${board.id}`,
-          alpha.token,
-        );
+        const boardRes = await api("GET", `/api/boards/${board.id}`, alpha);
         expectStatus(boardRes, 200, "board get");
         const view = await json<{ board: Board; versions: VersionMeta[] }>(
           boardRes,
@@ -735,6 +764,181 @@ async function run(): Promise<0 | 1> {
           view.board.current_version === 2 && view.versions.length === 2,
           `board should be at v2 with two versions: current=${view.board.current_version}, versions=${view.versions.length}`,
         );
+      },
+    );
+
+    // --- M8 session wave (D20): the loop an agent actually runs, through the
+    // real CLI as subprocesses with BOARD_DATA_DIR pointed at THIS smoke's
+    // temp registry (never ~/.board) — up → REST iterate → instances → down.
+
+    const session = await step(
+      "session instance up — health, env-file token, human link",
+      async () => {
+        const md = join(dataDir, "session-review.md");
+        await Bun.write(md, SESSION_MD);
+        const res = await cli([
+          "up",
+          md,
+          "--title",
+          "M8 smoke — session review",
+        ]);
+        assert(res.code === 0, `board up failed (${res.code}):\n${res.stderr}`);
+        const up = parseInstanceUp(res.stdout);
+        sessionId = up.id;
+        const paths = instancePaths(dataDir, up.id);
+        assert(
+          up.envPath === paths.env,
+          `env file at unexpected path: ${up.envPath}`,
+        );
+        const health = await fetch(`${up.url}/api/health`);
+        assert(health.status === 200, `instance health: HTTP ${health.status}`);
+        // the env file is the credential delivery artifact (D20): its token
+        // — read back through the wave-1 helper — reads the board at v1
+        const envToken = readEnvToken(paths);
+        assert(
+          envToken !== null && envToken.length > 0,
+          "env file carries no BOARD_TOKEN",
+        );
+        const vres = await fetch(`${up.url}/api/boards/${up.boardId}`, {
+          headers: { authorization: `Bearer ${envToken ?? ""}` },
+        });
+        assert(
+          vres.status === 200,
+          `board read via env-file token: HTTP ${vres.status}`,
+        );
+        const view = (await vres.json()) as {
+          board: { current_version: number; title: string };
+        };
+        assert(
+          view.board.current_version === 1 &&
+            view.board.title === "M8 smoke — session review",
+          `unexpected v1 view: ${JSON.stringify(view.board)}`,
+        );
+        // the human link's exchange token swaps for a session that reads it
+        const exch = /\?token=([A-Za-z0-9_-]{43})/.exec(up.human)?.[1] ?? "";
+        const xres = await fetch(`${up.url}/api/session/exchange`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: exch }),
+        });
+        assert(xres.status === 200, `human link exchange: HTTP ${xres.status}`);
+        const sess = (await xres.json()) as { token: string };
+        const sres = await fetch(`${up.url}/api/boards/${up.boardId}`, {
+          headers: { authorization: `Bearer ${sess.token}` },
+        });
+        assert(sres.status === 200, `session board read: HTTP ${sres.status}`);
+        return { ...up, sessionToken: sess.token };
+      },
+    );
+
+    await step(
+      "session iteration: v2 via REST, human comment, agent cursor sees it",
+      async () => {
+        const agent = { authorization: `Bearer ${session.token}` };
+        const pub = await fetch(
+          `${session.url}/api/boards/${session.boardId}/publish`,
+          {
+            method: "POST",
+            headers: { ...agent, "content-type": "application/json" },
+            body: JSON.stringify({
+              format: "markdown",
+              content: SESSION_MD_V2,
+              expected_version: 1,
+            }),
+          },
+        );
+        assert(pub.status === 201, `v2 publish: HTTP ${pub.status}`);
+        // the human session comments on the v1 heading (same quote that
+        // cannot miss: the anchor label IS the section text)
+        const v1 = (await (
+          await fetch(
+            `${session.url}/api/boards/${session.boardId}/versions/1`,
+            {
+              headers: { authorization: `Bearer ${session.sessionToken}` },
+            },
+          )
+        ).json()) as {
+          anchors: Array<{ kind: string; id: string; label: string }>;
+        };
+        const heading = v1.anchors.find((a) => a.kind === "heading");
+        assert(
+          heading !== undefined,
+          `no heading anchor on v1: ${JSON.stringify(v1.anchors)}`,
+        );
+        const quote = heading?.label ?? "";
+        const cres = await fetch(
+          `${session.url}/api/boards/${session.boardId}/comments`,
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${session.sessionToken}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              anchor: {
+                type: "text",
+                section_id: heading?.id,
+                originalText: quote,
+                startOffset: 0,
+                endOffset: quote.length,
+              },
+              body: "sign-off recorded — ship it",
+              version_n: 1,
+            }),
+          },
+        );
+        assert(cres.status === 201, `human comment: HTTP ${cres.status}`);
+        const poll = (await (
+          await fetch(
+            `${session.url}/api/boards/${session.boardId}/comments?since=0`,
+            { headers: agent },
+          )
+        ).json()) as { comments: Array<{ author: string }> };
+        assert(
+          poll.comments.length === 1 && poll.comments[0]?.author === "human",
+          `agent cursor should see exactly the human comment: ${JSON.stringify(poll.comments)}`,
+        );
+      },
+    );
+
+    await step("board instances shows the live instance", async () => {
+      const res = await cli(["instances"]);
+      assert(
+        res.code === 0,
+        `board instances failed (${res.code}):\n${res.stderr}`,
+      );
+      assert(
+        res.stdout.includes(session.id) && /\blive\b/.test(res.stdout),
+        `instance ${session.id} not listed live:\n${res.stdout}`,
+      );
+    });
+
+    await step(
+      "board down — keepsake zip, env + temp purge, port closed",
+      async () => {
+        const res = await cli(["down", session.id]);
+        assert(
+          res.code === 0,
+          `board down failed (${res.code}):\n${res.stderr}`,
+        );
+        const paths = instancePaths(dataDir, session.id);
+        const zipPath = join(paths.boards, `${session.boardId}.zip`);
+        const zip = Bun.file(zipPath);
+        assert(await zip.exists(), `keepsake zip missing: ${zipPath}`);
+        assert((await zip.size) > 0, `keepsake zip is empty: ${zipPath}`);
+        assert(!existsSync(paths.env), "env file survived down");
+        const entry = readInstanceEntry(paths);
+        if (entry === null || entry.closedAt === undefined) {
+          throw new Error("instance entry not closed-stamped after down");
+        }
+        assert(!existsSync(entry.dataDir), "temp data dir survived down");
+        let refused = false;
+        try {
+          await fetch(`${session.url}/api/health`);
+        } catch {
+          refused = true; // connection refused — the daemon is gone
+        }
+        assert(refused, "instance port still accepts connections");
       },
     );
 
@@ -754,24 +958,51 @@ async function run(): Promise<0 | 1> {
         `  last response: HTTP ${lastResponse.status} ${lastResponse.body.slice(0, 2000)}`,
       );
     }
-    const stderr = daemonStderr.trim();
-    if (stderr.length > 0) {
-      console.error(`  daemon stderr (tail):\n${stderr}`);
+    // daemon.log replaced the stderr pipe of the hand-rolled spawn: both
+    // daemon streams land there (the FAIL-path debugging aid).
+    if (smokePaths !== undefined && existsSync(smokePaths.log)) {
+      const tail = readFileSync(smokePaths.log, "utf8").slice(-4000).trim();
+      if (tail.length > 0) {
+        console.error(`  daemon.log (tail):\n${tail}`);
+      }
     }
     return 1;
   } finally {
-    // ALWAYS tear down — scratch daemon, scratch receiver, temp dir die with
-    // the script, including on failure.
-    proc.kill("SIGTERM");
-    const exited = await Promise.race([
-      proc.exited,
-      sleep(8000).then(() => null),
-    ]);
-    if (exited === null) {
-      proc.kill("SIGKILL");
-      await proc.exited;
-    }
+    // ALWAYS tear down — both daemons (the smoke's own and any session
+    // instance the CLI wave spawned), the scratch receiver, and the temp
+    // dirs die with the script, including on failure paths. The wave-1
+    // helper owns the signal ladder + temp purge; keepsake export would be
+    // rmSync'd with the registry a line later, so it is off.
     receiver.stop();
+    if (spawned !== undefined && smokePaths !== undefined) {
+      try {
+        await teardownInstance(spawned.entry, smokePaths, {
+          exportKeepsakes: false,
+          notice: (m) => console.error(`board smoke: ${m}`),
+        });
+      } catch (err) {
+        console.error(
+          `board smoke: smoke-daemon teardown failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (sessionId !== undefined) {
+      const sPaths = instancePaths(dataDir, sessionId);
+      const sEntry = readInstanceEntry(sPaths);
+      if (sEntry !== null && sEntry.closedAt === undefined) {
+        // the smoke died before step 19's `board down` — no leaked daemon
+        try {
+          await teardownInstance(sEntry, sPaths, {
+            exportKeepsakes: false,
+            notice: (m) => console.error(`board smoke: ${m}`),
+          });
+        } catch (err) {
+          console.error(
+            `board smoke: session-instance teardown failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
     rmSync(dataDir, { recursive: true, force: true });
   }
 }

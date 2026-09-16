@@ -1,0 +1,362 @@
+// D20 wave-2 contract tests: instance RESOLUTION across the CLI — every case
+// runs the real CLI as a subprocess (the cli/src/instances.test.ts pattern)
+// with temp BOARD_DATA_DIR everywhere — never the real ~/.board. Spawned
+// instance daemons are tracked via instance.json's pid and force-killed in
+// afterAll so a failing assertion cannot leak a process.
+import { afterAll, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openDb } from "../../server/src/db.ts";
+import { instancePaths } from "./instances.ts";
+
+const dirs: string[] = [];
+const spawned: Array<{ pid: number; dataDir: string }> = [];
+
+afterAll(async () => {
+  for (const { pid } of spawned) {
+    if (existsSync(`/proc/${pid}`)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+  }
+  for (const { dataDir } of spawned) {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+  for (const dir of dirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function freshDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "board-cli-resolve-test-"));
+  dirs.push(dir);
+  return dir;
+}
+
+interface Proc {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+async function runCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<Proc> {
+  const proc = Bun.spawn(
+    [process.execPath, join(import.meta.dir, "main.ts"), ...args],
+    { env, stdout: "pipe", stderr: "pipe" },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode: exitCode ?? -1, stdout, stderr };
+}
+
+interface UpOutput {
+  id: string;
+  url: string;
+  token: string;
+  envPath: string;
+  human?: string;
+}
+
+function parseUp(stdout: string): UpOutput {
+  const head =
+    /instance (s-[0-9A-Za-z]{10}) listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(
+      stdout,
+    );
+  const token =
+    /^agent token \(print once — it is not recoverable\): (\S+)$/m.exec(
+      stdout,
+    )?.[1];
+  const envPath =
+    /^credentials env file \(agent shells: source it\): (.+)$/m.exec(
+      stdout,
+    )?.[1];
+  const human = /^human link: (.+)$/m.exec(stdout)?.[1];
+  if (head === null || token === undefined || envPath === undefined) {
+    throw new Error(`could not parse up output:\n${stdout}`);
+  }
+  return { id: head[1] ?? "", url: head[2] ?? "", token, envPath, human };
+}
+
+function boardIdFrom(up: UpOutput): string {
+  const id = /#\/boards\/([0-9A-Za-z]{10})/.exec(up.human ?? "")?.[1];
+  if (id === undefined) {
+    throw new Error(`no human link board id in up output:\n${up.human}`);
+  }
+  return id;
+}
+
+// Track a live instance for afterAll force-kill, reading the pid back from
+// the registry (the CLI output deliberately does not print the pid).
+function trackInstance(
+  dir: string,
+  up: UpOutput,
+): { pid: number; dataDir: string } {
+  const entry = JSON.parse(
+    readFileSync(instancePaths(dir, up.id).json, "utf8"),
+  ) as { pid: number; dataDir: string };
+  spawned.push({ pid: entry.pid, dataDir: entry.dataDir });
+  return entry;
+}
+
+async function awaitGone(pid: number, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (existsSync(`/proc/${pid}`)) {
+    if (Date.now() > deadline) {
+      throw new Error(`pid ${pid} still alive after ${timeoutMs}ms`);
+    }
+    await Bun.sleep(50);
+  }
+}
+
+const MD =
+  "# Resolution fixture\n\n## Section one\n\nThe resolver must find this board.\n";
+
+// up a fixture instance; returns the parsed output + the tracked pid entry.
+async function spawnFixture(dir: string): Promise<{
+  up: UpOutput;
+  entry: { pid: number; dataDir: string };
+  boardId: string;
+}> {
+  const md = join(dir, "fixture.md");
+  writeFileSync(md, MD);
+  const res = await runCli(["up", md], { BOARD_DATA_DIR: dir });
+  expect(res.exitCode).toBe(0);
+  const up = parseUp(res.stdout);
+  const entry = trackInstance(dir, up);
+  return { up, entry, boardId: boardIdFrom(up) };
+}
+
+describe("open --instance (resolution + link)", () => {
+  test("contract 1: the link is served by the INSTANCE and exchanges", async () => {
+    const dir = freshDir();
+    const { up, boardId } = await spawnFixture(dir);
+    const res = await runCli(["open", "--instance", up.id, boardId], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(res.exitCode).toBe(0);
+    const url = res.stdout.trim();
+    // the link points at the INSTANCE's port, in the exact human-link shape
+    expect(url).toMatch(
+      new RegExp(
+        `^${up.url.replace(/:/g, "\\:")}\\/\\?token=[A-Za-z0-9_-]{43}#\\/boards\\/${boardId}$`,
+      ),
+    );
+    // the link's exchange token swaps for a session that reads the board
+    const exchange = /\?token=([A-Za-z0-9_-]{43})/.exec(url)?.[1] ?? "";
+    const xres = await fetch(`${up.url}/api/session/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: exchange }),
+    });
+    expect(xres.status).toBe(200);
+    const session = (await xres.json()) as { token: string };
+    const sres = await fetch(`${up.url}/api/boards/${boardId}`, {
+      headers: { authorization: `Bearer ${session.token}` },
+    });
+    expect(sres.status).toBe(200);
+  }, 30_000);
+});
+
+describe("BOARD_INSTANCE env + precedence", () => {
+  test("contract 2: `board list` follows BOARD_INSTANCE to the instance db", async () => {
+    const dir = freshDir();
+    const { up, boardId } = await spawnFixture(dir);
+    // NO BOARD_TOKEN env — the credential comes from the instance env file;
+    // no shared daemon exists on :7800, so success itself proves redirection.
+    const res = await runCli(["list"], {
+      BOARD_DATA_DIR: dir,
+      BOARD_INSTANCE: up.id,
+    });
+    expect(res.exitCode).toBe(0);
+    expect(res.stderr).toBe("");
+    expect(res.stdout).toContain(boardId);
+    expect(res.stdout).toContain("fixture.md");
+  }, 30_000);
+
+  test("contract 3a: --instance flag beats a bogus BOARD_INSTANCE env", async () => {
+    const dir = freshDir();
+    const { up, boardId } = await spawnFixture(dir);
+    // env points at a dead id; the flag must win
+    const res = await runCli(["list", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+      BOARD_INSTANCE: "s-bogus00000",
+    });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(boardId);
+    // and the mirror: the flag pointing at a dead id must NOT fall back to env
+    const back = await runCli(["list", "--instance", "s-bogus00000"], {
+      BOARD_DATA_DIR: dir,
+      BOARD_INSTANCE: up.id,
+    });
+    expect(back.exitCode).toBe(1);
+    expect(back.stderr).toContain("s-bogus00000");
+  }, 30_000);
+
+  test("contract 3b: --token beats a (sabotaged) env-file token", async () => {
+    const dir = freshDir();
+    const { up, boardId } = await spawnFixture(dir);
+    const paths = instancePaths(dir, up.id);
+    // sabotage the env-file credential: env-file alone must now fail
+    writeFileSync(
+      paths.env,
+      `export BOARD_INSTANCE=${up.id}\nexport BOARD_TOKEN=bogus-token\n`,
+    );
+    const sabotaged = await runCli(["list", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(sabotaged.exitCode).toBe(1);
+    // --token must override the sabotaged env file and succeed
+    const res = await runCli(
+      ["list", "--instance", up.id, "--token", up.token],
+      { BOARD_DATA_DIR: dir },
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(boardId);
+  }, 30_000);
+});
+
+describe("export --instance on a closed instance", () => {
+  test("contract 4a: down --keep-data then export zips from disk to cwd", async () => {
+    const dir = freshDir();
+    const { up, boardId } = await spawnFixture(dir);
+    const down = await runCli(["down", up.id, "--keep-data"], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(down.exitCode).toBe(0);
+
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const res = await runCli(["export", "--instance", up.id, boardId], {
+        BOARD_DATA_DIR: dir,
+      });
+      expect(res.exitCode).toBe(0);
+      const file = join(dir, `${boardId}.zip`);
+      expect(existsSync(file)).toBe(true);
+      expect(res.stdout).toContain(`${boardId}.zip`);
+      // non-empty and a real zip (PK magic) — re-importable by construction
+      const bytes = new Uint8Array(readFileSync(file));
+      expect(bytes.length).toBeGreaterThan(0);
+      expect([bytes[0], bytes[1]]).toEqual([0x50, 0x4b]);
+    } finally {
+      process.chdir(cwd);
+    }
+  }, 60_000);
+
+  test("contract 4b: a purged dataDir errors pointing at the keepsake zips", async () => {
+    const dir = freshDir();
+    const { up, boardId } = await spawnFixture(dir);
+    const down = await runCli(["down", up.id], { BOARD_DATA_DIR: dir });
+    expect(down.exitCode).toBe(0);
+    const keepsakes = instancePaths(dir, up.id).boards;
+
+    const res = await runCli(["export", "--instance", up.id, boardId], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("purged at teardown");
+    expect(res.stderr).toContain(keepsakes);
+    // and the keepsakes really are there to be pointed at
+    expect(readdirSync(keepsakes)).toEqual([`${boardId}.zip`]);
+  }, 60_000);
+});
+
+describe("dead instance errors", () => {
+  test("contract 5: open/list on a killed instance error clearly, exit 1", async () => {
+    const dir = freshDir();
+    const { up } = await spawnFixture(dir);
+    const entry = trackInstanceData(dir, up);
+    process.kill(entry.pid, "SIGKILL");
+    await awaitGone(entry.pid);
+
+    const open = await runCli(["open", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(open.exitCode).toBe(1);
+    expect(open.stderr).toContain(up.id);
+    expect(open.stderr).toContain("not running");
+
+    const list = await runCli(["list", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(list.exitCode).toBe(1);
+    expect(list.stderr).toContain(up.id);
+    expect(list.stderr).toContain("not serving REST");
+  }, 30_000);
+
+  test("contract 6: an unknown id errors listing the live instances", async () => {
+    const dir = freshDir();
+    const { up } = await spawnFixture(dir);
+    const res = await runCli(["list", "--instance", "s-nonexistnt"], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('unknown instance "s-nonexistnt"');
+    expect(res.stderr).toContain(up.id);
+  }, 30_000);
+});
+
+describe("token --instance (dataDir resolution)", () => {
+  test("contract 7: token add lands in the INSTANCE db, list sees it", async () => {
+    const dir = freshDir();
+    const { up } = await spawnFixture(dir);
+    const entry = trackInstanceData(dir, up);
+
+    const add = await runCli(["token", "add", "extra", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(add.exitCode).toBe(0);
+    const minted = add.stdout
+      .split("\n")
+      .find((line) => /^[A-Za-z0-9_-]{43}$/.test(line));
+    expect(minted).toBeDefined();
+
+    // the row is in the instance's temp db, not the shared one
+    const db = openDb(entry.dataDir);
+    try {
+      const names = (
+        db.prepare("SELECT name FROM tokens ORDER BY name").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name);
+      expect(names).toEqual(["extra", "session"]);
+    } finally {
+      db.close();
+    }
+
+    const list = await runCli(["token", "list", "--instance", up.id], {
+      BOARD_DATA_DIR: dir,
+    });
+    expect(list.exitCode).toBe(0);
+    expect(list.stdout).toContain("extra");
+  }, 30_000);
+});
+
+// Re-read the registry pid (spawnFixture already tracked it; this second read
+// keeps the dead-instance test independent of spawnFixture's return shape).
+function trackInstanceData(
+  dir: string,
+  up: UpOutput,
+): { pid: number; dataDir: string } {
+  return JSON.parse(readFileSync(instancePaths(dir, up.id).json, "utf8")) as {
+    pid: number;
+    dataDir: string;
+  };
+}

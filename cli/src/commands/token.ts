@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import type { Config } from "../../../server/src/config.ts";
+import { openDb } from "../../../server/src/db.ts";
 import {
   type CreatedToken,
   createToken,
@@ -7,7 +9,9 @@ import {
   revokeToken,
   TokenNameTaken,
 } from "../../../server/src/tokens.ts";
+import { dbTarget } from "../resolve.ts";
 import { renderTable } from "../table.ts";
+import { scan } from "./rest.ts";
 
 export interface CommandIo {
   stdout(text: string): void;
@@ -15,13 +19,13 @@ export interface CommandIo {
 }
 
 interface TokenCommandInput {
-  db: Database;
+  config: Config;
   argv: string[];
   io: CommandIo;
 }
 
 export const TOKEN_USAGE =
-  "usage: board token add <name> [--force] | board token list | board token revoke <name>";
+  "usage: board token add <name> [--force] [--instance <id>] | board token list [--instance <id>] | board token revoke <name> [--instance <id>]";
 
 function tokenAdd(
   db: Database,
@@ -96,29 +100,81 @@ function tokenRevoke(db: Database, name: string, io: CommandIo): number {
   return 0;
 }
 
-export function runTokenCommand({ db, argv, io }: TokenCommandInput): number {
+// The human's-tool local-db path (invariant 4's sanctioned exception, same as
+// `open`): token rows live in the target db — the shared data dir by default,
+// the instance's temp db with --instance (D20 wave 2, resolve.ts). Opened only
+// after argv/resolution pass, so usage errors never create the data dir (the
+// twice-bitten footgun).
+function withDb(
+  config: Config,
+  instance: string | undefined,
+  io: CommandIo,
+  run: (db: Database) => number,
+): number {
+  const target = dbTarget(config, instance);
+  if (typeof target === "string") {
+    io.stderr(`board: ${target}`);
+    return 1;
+  }
+  const db = openDb(target.dataDir);
+  try {
+    return run(db);
+  } finally {
+    db.close();
+  }
+}
+
+export function runTokenCommand({
+  config,
+  argv,
+  io,
+}: TokenCommandInput): number {
   const [sub, ...rest] = argv;
   switch (sub) {
     case "add": {
-      // simple argv scan (no arg-parsing dependency): flags and the name
-      // commute — `add --force cli` and `add cli --force` both parse
-      const name = rest.find((arg) => arg !== "--force");
-      const force = rest.includes("--force");
+      // simple argv scan: flags and the name commute — `add --force cli` and
+      // `add cli --force` both parse
+      const scanned = scan(rest, ["--instance"], ["--force"]);
+      if (typeof scanned === "string") {
+        io.stderr(`board: ${scanned}`);
+        io.stderr(TOKEN_USAGE);
+        return 1;
+      }
+      const name = scanned.positional[0];
       if (name === undefined || name.length === 0) {
         io.stderr(TOKEN_USAGE);
         return 1;
       }
-      return tokenAdd(db, name, force, io);
+      return withDb(config, scanned.values.get("instance"), io, (db) =>
+        tokenAdd(db, name, scanned.bools.has("force"), io),
+      );
     }
-    case "list":
-      return tokenList(db, io);
-    case "revoke": {
-      const revokeName = rest[0];
-      if (revokeName === undefined || revokeName.length === 0) {
+    case "list": {
+      const scanned = scan(rest, ["--instance"], []);
+      if (typeof scanned === "string") {
+        io.stderr(`board: ${scanned}`);
         io.stderr(TOKEN_USAGE);
         return 1;
       }
-      return tokenRevoke(db, revokeName, io);
+      return withDb(config, scanned.values.get("instance"), io, (db) =>
+        tokenList(db, io),
+      );
+    }
+    case "revoke": {
+      const scanned = scan(rest, ["--instance"], []);
+      if (typeof scanned === "string") {
+        io.stderr(`board: ${scanned}`);
+        io.stderr(TOKEN_USAGE);
+        return 1;
+      }
+      const name = scanned.positional[0];
+      if (name === undefined || name.length === 0) {
+        io.stderr(TOKEN_USAGE);
+        return 1;
+      }
+      return withDb(config, scanned.values.get("instance"), io, (db) =>
+        tokenRevoke(db, name, io),
+      );
     }
     default:
       io.stderr(TOKEN_USAGE);

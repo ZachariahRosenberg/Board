@@ -25,6 +25,7 @@ import {
 } from "../instances.ts";
 import { renderTable } from "../table.ts";
 import { defaultOpener, type OpenUrl } from "./open.ts";
+import { scan } from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
 export const INSTANCES_USAGE = `usage: board up [file] [--title T] [--format markdown|html] [--tags a,b] [--agent NAME] [--open]
@@ -47,45 +48,6 @@ function argError(io: CommandIo, message: string): number {
   io.stderr(`board: ${message}`);
   io.stderr(INSTANCES_USAGE);
   return 1;
-}
-
-// Tiny scanner (no arg-parsing dependency, same spirit as token.ts): flags
-// and positionals commute; value flags take `--flag v` or `--flag=v`.
-function scan(
-  argv: string[],
-  valueFlags: readonly string[],
-  boolFlags: readonly string[],
-):
-  | { values: Map<string, string>; bools: Set<string>; positional: string[] }
-  | string {
-  const values = new Map<string, string>();
-  const bools = new Set<string>();
-  const positional: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i] ?? "";
-    const eq = arg.indexOf("=");
-    const bare = eq === -1 ? arg : arg.slice(0, eq);
-    if (valueFlags.includes(bare)) {
-      const value = eq === -1 ? argv[i + 1] : arg.slice(eq + 1);
-      if (value === undefined || value.length === 0) {
-        return `flag ${bare} needs a value`;
-      }
-      values.set(bare.slice(2), value);
-      if (eq === -1) {
-        i++;
-      }
-      continue;
-    }
-    if (boolFlags.includes(arg)) {
-      bools.add(arg.slice(2));
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      return `unknown flag "${arg}"`;
-    }
-    positional.push(arg);
-  }
-  return { values, bools, positional };
 }
 
 function parseTags(raw: string): string[] {

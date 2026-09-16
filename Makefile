@@ -1,4 +1,4 @@
-.PHONY: deps install test typecheck lint serve dev token web open list export import smoke
+.PHONY: deps install test typecheck lint serve dev token web open list export import smoke up down instances
 
 deps:
 	bun install
@@ -71,3 +71,20 @@ export:
 # bundle under a fresh board id
 import:
 	bun run cli/src/main.ts import $(FILE) $(filter-out $@,$(MAKECMDGOALS))
+
+# `make up [FILE=<md>] [TITLE="..."]` (or positional: `make up plan.md`) —
+# spawn a session instance (D20); a FILE publishes as v1 and prints a one-time
+# human link. Other flags ride FLAGS= (e.g. `make up FILE=plan.md
+# FLAGS="--tags review --open"`) — per-flag vars would collide with ambient
+# env (this box exports AGENT=1, which a $(AGENT:...) pass-through would eat).
+up:
+	bun run cli/src/main.ts up $(FILE) $(if $(TITLE),--title '$(TITLE)') $(FLAGS) $(filter-out $@,$(MAKECMDGOALS))
+
+# `make down [ID=s-xxxx]` (or positional) — tear down a session instance
+# ($BOARD_INSTANCE or id); --keep-data/--no-export via FLAGS=
+down:
+	bun run cli/src/main.ts down $(ID) $(filter-out $@,$(MAKECMDGOALS))
+
+# `make instances` — live session instances; FLAGS=--all (closed) / --prune
+instances:
+	bun run cli/src/main.ts instances $(FLAGS) $(filter-out $@,$(MAKECMDGOALS))

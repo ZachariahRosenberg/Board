@@ -39,8 +39,14 @@ commands:
                        end boards, keep zip keepsakes, purge temp data + env
   instances            list session instances (live; --all closed; --prune stale)
 
+Session instances (board up): list/open/export/import/status and token
+add/list/revoke accept --instance <id> (or BOARD_INSTANCE — set by sourceing
+an instance env file) and target that instance's daemon/db instead of the
+shared one. export works on a closed instance too (zips from disk).
+
 REST commands (list/status/export/import) authenticate with --token <token> or
-BOARD_TOKEN; mint one with: make token add cli
+BOARD_TOKEN; with --instance the instance env file's token is the fallback.
+Mint one with: make token add cli
 `;
 
 export function usage(): string {
@@ -71,21 +77,21 @@ export async function main(argv: string[]): Promise<number> {
       runServe();
       return 0;
     case "token": {
-      // Validate before opening the db: usage-error paths must not create the
+      // Validate before opening any db: usage-error paths must not create the
       // data dir (twice-bitten footgun — an empty ~/.board from `make token`).
+      // runTokenCommand owns the rest of the parsing and opens the RIGHT db
+      // itself (shared data dir, or the instance's temp db with --instance —
+      // the sanctioned local-db path, invariant 4).
       const [sub] = rest;
       if (sub !== "add" && sub !== "list" && sub !== "revoke") {
         console.error(TOKEN_USAGE);
         return 1;
       }
-      // Invariant 4 bars agents from writing ~/.board directly; this CLI is the human's local tool, so opening the db here is the sanctioned path.
-      const config = loadConfig();
-      const db = openDb(config.dataDir);
-      try {
-        return runTokenCommand({ db, argv: rest, io: consoleIo() });
-      } finally {
-        db.close();
-      }
+      return runTokenCommand({
+        config: loadConfig(),
+        argv: rest,
+        io: consoleIo(),
+      });
     }
     case "install": {
       // Validate before opening the db: usage-error paths must not create the
@@ -104,21 +110,15 @@ export async function main(argv: string[]): Promise<number> {
         db.close();
       }
     }
-    case "open": {
-      // Same sanctioned local-db path as token: the human's tool.
-      const config = loadConfig();
-      const db = openDb(config.dataDir);
-      try {
-        return runOpenCommand({
-          db,
-          argv: rest,
-          config,
-          io: consoleIo(),
-        });
-      } finally {
-        db.close();
-      }
-    }
+    case "open":
+      // The sanctioned local-db path (invariant 4) moved into runOpenCommand:
+      // with --instance the exchange token is minted on the INSTANCE's temp
+      // db while its daemon serves the link (D20 wave 2).
+      return runOpenCommand({
+        config: loadConfig(),
+        argv: rest,
+        io: consoleIo(),
+      });
     case "list":
     case "export":
     case "import":

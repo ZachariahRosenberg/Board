@@ -25,11 +25,8 @@ import { join } from "node:path";
 import { buildBundle } from "../../server/src/bundle.ts";
 import { openDb } from "../../server/src/db.ts";
 import { shortId } from "../../server/src/ids.ts";
+import { LISTEN_LINE } from "../../server/src/main.ts";
 import { createToken } from "../../server/src/tokens.ts";
-
-// server/src/main.ts prints exactly this once ready; the daemon subprocess
-// test (cli/src/main.test.ts) and scripts/smoke.ts match the same line.
-const LISTEN_LINE = /board: host app listening on (http:\S+)/;
 
 const POLL_MS = 100;
 const READY_TIMEOUT_MS = 10_000;
@@ -301,11 +298,19 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
 export interface SpawnedInstance {
   entry: InstanceEntry;
   token: string;
+  // Plaintexts for extraAgentTokenNames, positionally aligned. Same one-print
+  // discipline as token: the caller surfaces them once, nothing but the env
+  // file and the db hash ever holds them.
+  extraTokens: string[];
 }
 
 export interface SpawnOptions {
   registryDataDir: string;
   agentTokenName: string;
+  // Extra agent credentials minted in the SAME pre-spawn db session — one
+  // open/close window keeps the no-boot-WAL-race guarantee uniform no matter
+  // how many agent tokens a caller needs (scripts/smoke.ts needs two).
+  extraAgentTokenNames?: string[];
   readyTimeoutMs?: number;
 }
 
@@ -334,6 +339,9 @@ export async function spawnInstance(
     // the db it is SHA-256 (invariant 8). [D20]
     const db = openDb(dataDir);
     const { token } = createToken(db, { name: opts.agentTokenName });
+    const extraTokens = (opts.extraAgentTokenNames ?? []).map(
+      (name) => createToken(db, { name }).token,
+    );
     db.close();
 
     // Env is PINNED over the inherited environ: a hostile BOARD_HOST=0.0.0.0
@@ -373,7 +381,7 @@ export async function spawnInstance(
     };
     writeInstanceEntry(paths, entry);
     writeEnvFile(paths, { id, port: entry.port, token });
-    return { entry, token };
+    return { entry, token, extraTokens };
   } catch (err) {
     // Boot failed: never leak a half-registered instance. The Subprocess
     // handle is authoritative here (our own child — no identity question),

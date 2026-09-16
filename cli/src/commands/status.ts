@@ -1,16 +1,11 @@
 // status (P3-6, promised in the usage text since M1): a quick health read of
 // one board. REST against the live daemon like the boards.ts commands (no
-// local db — invariant 3), built strictly on existing routes.
+// local db — invariant 3), built strictly on existing routes. Instance-aware
+// per D20 wave 2 (resolve.ts owns the precedence).
 import type { Config } from "../../../server/src/config.ts";
-import { originUrlFor } from "../../../server/src/daemon.ts";
+import { type RestTarget, restTarget } from "../resolve.ts";
 import { renderTable } from "../table.ts";
-import {
-  bearer,
-  errorMessage,
-  type FetchLike,
-  type ParsedArgs,
-  parseArgs,
-} from "./rest.ts";
+import { bearer, errorMessage, type FetchLike, parseArgs } from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
 export const STATUS_USAGE = "usage: board status <board_id>";
@@ -62,15 +57,15 @@ function unresolvedRoots(comments: CommentView[]): number {
 
 async function runStatus(
   input: StatusCommandInput,
-  parsed: ParsedArgs,
+  target: RestTarget,
   boardId: string,
 ): Promise<number> {
-  const { io, config, fetchImpl } = input;
+  const { io, fetchImpl } = input;
   const doFetch = fetchImpl ?? fetch;
-  const headers = bearer(parsed.token);
+  const headers = bearer(target.token);
 
   const boardRes = await doFetch(
-    new URL(`/api/boards/${boardId}`, originUrlFor(config.host, config.port)),
+    new URL(`/api/boards/${boardId}`, target.baseUrl),
     { headers },
   );
   if (!boardRes.ok) {
@@ -84,10 +79,7 @@ async function runStatus(
   // as a cursor-presence poll for agent callers (server/src/comments.ts):
   // polls count as presence by design, so a status run may list itself.
   const commentsRes = await doFetch(
-    new URL(
-      `/api/boards/${boardId}/comments`,
-      originUrlFor(config.host, config.port),
-    ),
+    new URL(`/api/boards/${boardId}/comments`, target.baseUrl),
     { headers },
   );
   if (!commentsRes.ok) {
@@ -104,10 +96,7 @@ async function runStatus(
   let ended: string | null = null;
   if (board.status === "ended") {
     const eventsRes = await doFetch(
-      new URL(
-        `/api/boards/${boardId}/events`,
-        originUrlFor(config.host, config.port),
-      ),
+      new URL(`/api/boards/${boardId}/events`, target.baseUrl),
       { headers },
     );
     if (!eventsRes.ok) {
@@ -123,10 +112,7 @@ async function runStatus(
   // Agent-visible: /api/boards/:id/subscribers is plain bearer auth (no scope
   // gating in server/src/auth.ts) returning the merged presence view.
   const subsRes = await doFetch(
-    new URL(
-      `/api/boards/${boardId}/subscribers`,
-      originUrlFor(config.host, config.port),
-    ),
+    new URL(`/api/boards/${boardId}/subscribers`, target.baseUrl),
     { headers },
   );
   if (!subsRes.ok) {
@@ -183,5 +169,13 @@ export async function runStatusCommand(
     input.io.stderr(STATUS_USAGE);
     return 1;
   }
-  return runStatus(input, parsed, boardId);
+  // Instance-aware target (D20 wave 2): --instance/BOARD_INSTANCE point the
+  // status read at the instance's daemon; none = the shared daemon as before.
+  const target = restTarget(input.config, parsed);
+  if (typeof target === "string") {
+    input.io.stderr(`board: ${target}`);
+    input.io.stderr(STATUS_USAGE);
+    return 1;
+  }
+  return runStatus(input, target, boardId);
 }

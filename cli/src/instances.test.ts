@@ -445,12 +445,14 @@ describe("board down", () => {
       const paths = instancePaths(dir, id);
       mkdirSync(paths.dir, { recursive: true });
       // a registry entry whose pid is a live non-board process
+      const spoofDataDir = mkdtempSync(join(tmpdir(), "board-spoof-data-"));
+      dirs.push(spoofDataDir); // the foreign-pid refusal must not leak it
       writeInstanceEntry(paths, {
         id,
         pid: decoy.pid,
         port: 1,
         url: "http://127.0.0.1:1",
-        dataDir: mkdtempSync(join(tmpdir(), "board-spoof-data-")),
+        dataDir: spoofDataDir,
         agentTokenName: "session",
         createdAt: new Date().toISOString(),
       });

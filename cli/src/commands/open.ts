@@ -1,16 +1,17 @@
-import type { Database } from "bun:sqlite";
 import type { Config } from "../../../server/src/config.ts";
-import { originUrlFor } from "../../../server/src/daemon.ts";
+import { openDb } from "../../../server/src/db.ts";
 import { createExchangeToken } from "../../../server/src/sessions.ts";
+import { openTarget } from "../resolve.ts";
+import { scan } from "./rest.ts";
 import type { CommandIo } from "./token.ts";
 
-// The seam type is exported for `board up --open`'s injected recorder.
 export type OpenUrl = (url: string, io: CommandIo) => void;
 
+export const OPEN_USAGE = "usage: board open [board id] [--instance <id>]";
+
 interface OpenCommandInput {
-  db: Database;
-  argv: string[];
   config: Config;
+  argv: string[];
   io: CommandIo;
   // Seam: tests inject a recorder; the default spawns xdg-open.
   openUrl?: OpenUrl;
@@ -38,29 +39,57 @@ export function defaultOpener(url: string, io: CommandIo): void {
   }
 }
 
+// The base comes from resolution (the instance's url or the shared daemon's
+// origin); the link shape is identical either way:
+// http://127.0.0.1:<port>/?token=<ex>#/boards/<id>.
 function boardOpenUrl(
-  config: Config,
+  baseUrl: string,
   exchangeToken: string,
   boardId?: string,
 ): string {
-  const base = `${originUrlFor(config.host, config.port)}/?token=${exchangeToken}`;
+  const base = `${baseUrl}/?token=${exchangeToken}`;
   return boardId === undefined ? base : `${base}#/boards/${boardId}`;
 }
 
 export function runOpenCommand({
-  db,
-  argv,
   config,
+  argv,
   io,
   openUrl = defaultOpener,
 }: OpenCommandInput): number {
-  const [first] = argv;
-  const boardId = first !== undefined && first.length > 0 ? first : undefined;
-  // docs/security.md: a one-time exchange token rides the URL; the SPA swaps
-  // it for a localStorage session bearer via POST /api/session/exchange.
-  const exchangeToken = createExchangeToken(db, boardId);
-  const url = boardOpenUrl(config, exchangeToken, boardId);
-  io.stdout(url);
-  openUrl(url, io);
-  return 0;
+  const scanned = scan(argv, ["--instance"], []);
+  if (typeof scanned === "string") {
+    io.stderr(`board: ${scanned}`);
+    io.stderr(OPEN_USAGE);
+    return 1;
+  }
+  if (scanned.positional.length > 1) {
+    io.stderr("board: open takes at most one board id");
+    io.stderr(OPEN_USAGE);
+    return 1;
+  }
+  const boardId = scanned.positional[0];
+  const target = openTarget(config, scanned.values.get("instance"));
+  if (typeof target === "string") {
+    io.stderr(`board: ${target}`);
+    io.stderr(OPEN_USAGE);
+    return 1;
+  }
+  // The human's-tool local-db path (invariant 4's sanctioned exception, same
+  // as token): the exchange token is minted directly on the target db — with
+  // --instance that is the instance's temp db while its daemon serves the
+  // link. Opened only after argv/resolution pass so usage errors never create
+  // the data dir (the twice-bitten footgun).
+  const db = openDb(target.dataDir);
+  try {
+    // docs/security.md: a one-time exchange token rides the URL; the SPA swaps
+    // it for a localStorage session bearer via POST /api/session/exchange.
+    const exchangeToken = createExchangeToken(db, boardId);
+    const url = boardOpenUrl(target.baseUrl, exchangeToken, boardId);
+    io.stdout(url);
+    openUrl(url, io);
+    return 0;
+  } finally {
+    db.close();
+  }
 }

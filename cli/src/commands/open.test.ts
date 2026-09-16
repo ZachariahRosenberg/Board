@@ -16,24 +16,20 @@ afterAll(() => {
   }
 });
 
-interface FreshDb {
-  db: Database;
-  dataDir: string;
-}
-
 // Tests never touch the real ~/.board — always a fresh temp data dir (AGENTS.md).
-function freshDb(): FreshDb {
+// runOpenCommand opens its own handle from the config (with --instance that is
+// the instance's db); tests open `db` for row assertions.
+function freshCtx(): { db: Database; config: Config } {
   const dataDir = mkdtempSync(join(tmpdir(), "board-cli-open-test-"));
   dirs.push(dataDir);
-  return { db: openDb(dataDir), dataDir };
-}
-
-function testConfig(dataDir: string): Config {
   return {
-    dataDir,
-    host: "127.0.0.1",
-    port: 7800,
-    bind: ["127.0.0.1"],
+    db: openDb(dataDir),
+    config: {
+      dataDir,
+      host: "127.0.0.1",
+      port: 7800,
+      bind: ["127.0.0.1"],
+    },
   };
 }
 
@@ -43,18 +39,16 @@ interface Capture {
   opened: string[];
 }
 
-function capture(dataDir: string): Capture & {
+function capture(config: Config): Capture & {
   run(argv: string[]): number;
 } {
   const out: string[] = [];
   const err: string[] = [];
   const opened: string[] = [];
-  const db = openDb(dataDir);
   const run = (argv: string[]): number =>
     runOpenCommand({
-      db,
+      config,
       argv,
-      config: testConfig(dataDir),
       io: {
         stdout: (text) => {
           out.push(text);
@@ -80,8 +74,8 @@ function sha256(value: string): string {
 
 describe("board open", () => {
   test("prints a well-formed URL carrying the token exactly once and opens it", () => {
-    const { db, dataDir } = freshDb();
-    const cap = capture(dataDir);
+    const { db, config } = freshCtx();
+    const cap = capture(config);
     const code = cap.run([]);
     expect(code).toBe(0);
     expect(cap.err).toEqual([]);
@@ -96,8 +90,8 @@ describe("board open", () => {
   });
 
   test("the printed exchange token is stored hashed with kind exchange", () => {
-    const { db, dataDir } = freshDb();
-    const cap = capture(dataDir);
+    const { db, config } = freshCtx();
+    const cap = capture(config);
     cap.run([]);
     const token = URL_RE.exec(cap.out[0] ?? "")?.[1] ?? "";
     const row = db
@@ -109,8 +103,8 @@ describe("board open", () => {
   });
 
   test("board open <ID> deep-links via #/boards/<ID> and records board_id", () => {
-    const { db, dataDir } = freshDb();
-    const cap = capture(dataDir);
+    const { db, config } = freshCtx();
+    const cap = capture(config);
     const code = cap.run(["ab12cd34ef"]);
     expect(code).toBe(0);
     const url = cap.out[0] ?? "";
@@ -126,8 +120,8 @@ describe("board open", () => {
   });
 
   test("without an ID the URL has no hash fragment", () => {
-    const { db, dataDir } = freshDb();
-    const cap = capture(dataDir);
+    const { db, config } = freshCtx();
+    const cap = capture(config);
     cap.run([]);
     expect(cap.out[0] ?? "").not.toContain("#");
     db.close();
