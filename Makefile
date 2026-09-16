@@ -33,7 +33,8 @@ dev:
 	fi; \
 	wait
 
-# `make token add myagent` — pass-through args (plan.md: make token add|list| revoke AGENT)
+# `make token add myagent` — pass-through args (plan.md: make token add|list| revoke AGENT);
+# names are permanent (D17) — mint a new name rather than re-adding a taken one
 token:
 	bun run cli/src/main.ts token $(filter-out $@,$(MAKECMDGOALS))
 %:
@@ -56,10 +57,12 @@ open:
 list:
 	bun run cli/src/main.ts list $(filter-out $@,$(MAKECMDGOALS))
 
-# `make export <ID> [FILE]` — save a board bundle as a zip (default <ID>.zip)
+# `make export ID=<id> [file]` (or positional: `make export <id> [file]`) — save
+# a board bundle as a zip (default <id>.zip)
 export:
-	bun run cli/src/main.ts export $(filter-out $@,$(MAKECMDGOALS))
+	bun run cli/src/main.ts export $(ID) $(filter-out $@,$(MAKECMDGOALS))
 
-# `make import <FILE>` — recreate a board from a bundle under a fresh board id
+# `make import FILE=<bundle.zip>` (or positional) — recreate a board from a
+# bundle under a fresh board id
 import:
-	bun run cli/src/main.ts import $(filter-out $@,$(MAKECMDGOALS))
+	bun run cli/src/main.ts import $(FILE) $(filter-out $@,$(MAKECMDGOALS))

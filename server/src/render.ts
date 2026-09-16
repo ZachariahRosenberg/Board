@@ -158,7 +158,14 @@ const SANITIZE_CONFIG: Config = {
 const SVG_SANITIZE_CONFIG: Config = {
   USE_PROFILES: { svg: true, svgFilters: true },
   FORBID_TAGS: ["script", "foreignobject"],
-  ALLOWED_URI_REGEXP: /^#/,
+  // DOMPurify checks ALLOWED_URI_REGEXP against EVERY attribute value, not
+  // just href/src — a bare /^#/ stripped all geometry (x, width, d, viewBox …;
+  // only #-prefixed fills survived — dogfooded on the M5+M6 acceptance board).
+  // This shape allows plain values and url(#fragment) refs while blocking
+  // scheme-bearing URLs, protocol-relative //, and url(<non-#>) — the
+  // external-reference classes docs/security.md "Assets" excludes.
+  ALLOWED_URI_REGEXP:
+    /^(?![a-z][a-z0-9+.-]*:)(?!\/\/)(?!url\(\s*['"]?\s*(?!#))/i,
   ADD_URI_SAFE_ATTR: ["xmlns", "xmlns:xlink"],
 };
 

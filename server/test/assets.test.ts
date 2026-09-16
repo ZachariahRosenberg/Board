@@ -380,11 +380,10 @@ describe("POST /api/assets — binary variant", () => {
 });
 
 describe("svg sanitization at ingest", () => {
-  // Script LAST on purpose: happy-dom's foreign-content parser truncates an
-  // svg subtree at a content-bearing <script>/<style> (fail-closed — the
-  // drawing after it is lost, nothing unsafe survives; see the comment on
-  // sanitizeSvgDocument). Script-last is the realistic attack shape — a clean
-  // icon with an injected script — and lets the assertions cover the strips.
+  // Script LAST on purpose: a clean drawing with an injected script is the
+  // realistic attack shape. sanitizeSvgDocument pre-strips script/style
+  // blocks BEFORE parsing (see its comment) — happy-dom's foreign-content
+  // parse would otherwise truncate the subtree at a content-bearing one.
   const DIRTY_SVG = [
     '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="12" height="12">',
     '  <rect width="12" height="12" fill="#f00" onload="alert(1)"/>',
@@ -437,6 +436,46 @@ describe("svg sanitization at ingest", () => {
     const served = await res.text();
     expect(served).not.toContain("<script");
     expect(served).not.toContain("evil.example");
+  });
+
+  // Regression (dogfooded on the M5+M6 acceptance board): DOMPurify checks
+  // ALLOWED_URI_REGEXP against EVERY attribute value, not just href/src —
+  // with a bare /^#/ the entire geometry layer (x/y/width/height/viewBox/d)
+  // was stripped and only #-valued fills survived, so benign drawings
+  // rendered blank.
+  test("benign geometry survives sanitization intact", async () => {
+    const { s, token } = await setup();
+    const board = await makeBoard(s, token);
+    const svg = [
+      '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">',
+      '  <rect x="40" y="40" width="200" height="80" rx="10" fill="#d9d7cf"/>',
+      '  <path d="M 240 80 L 220 160" stroke="#8a5cc2" stroke-width="4"/>',
+      '  <circle cx="320" cy="180" r="18" fill="#7fa98c"/>',
+      '  <text x="140" y="72" text-anchor="middle" font-family="monospace" font-size="15" fill="#333">agent</text>',
+      "</svg>",
+    ].join("\n");
+    const path = join(fixtureDir(), "geometry.svg");
+    writeFileSync(path, svg);
+    const res = await s.api.post(
+      "/api/assets",
+      { board_id: board.id, path },
+      { token },
+    );
+    expect(res.status).toBe(201);
+    const asset = (await res.json()) as Asset;
+    const stored = readFileSync(
+      join(s.dataDir, "boards", board.id, "assets", asset.file),
+      "utf8",
+    );
+    expect(stored).toContain('width="640"');
+    expect(stored).toContain('viewBox="0 0 640 360"');
+    expect(stored).toContain('x="40"');
+    expect(stored).toContain('rx="10"');
+    expect(stored).toContain('d="M 240 80 L 220 160"');
+    expect(stored).toContain('cx="320"');
+    expect(stored).toContain('text-anchor="middle"');
+    expect(stored).toContain('font-size="15"');
+    expect(stored).toContain("agent");
   });
 
   test("rejects non-svg content behind an .svg name", async () => {
