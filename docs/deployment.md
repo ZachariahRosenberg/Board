@@ -1,8 +1,18 @@
 # Deployment
 
-Installing, running, and supervising the daemon — on the host, under systemd, and in Docker — plus the agent-managed session instances (D20). The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, [security.md](security.md)). Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
+Installing, running, and supervising the daemon — on the host, under systemd, and in Docker — plus the agent-managed session instances (D20). The daemon is a **local-first, loopback-only** service for one human and their agents; nothing in this document changes that (invariant 1, [security.md](security.md)). Since D21 the shared daemon is the **optional persistent library**: setup is one command and never requires it, session instances are the default agent loop, and "running" the daemon here means starting it on demand — or permanently, if you want the library always available. Operations live in the Makefile (D10); this doc is the reference behind `make --help`.
 
 ## Install
+
+One command (D21 — the daemon is never started or required):
+
+```
+./scripts/setup.sh    # or: make setup
+```
+
+The bootstrap, end to end: a prerequisites check (bun on PATH — it prints the install one-liner and stops if missing; it never installs a toolchain for you), `make deps`, `make web` (a fresh clone has no `web/dist` — the UI 404s, `web_not_built`, without it), and `make install FLAGS=--force`. Re-runs are safe and **rotate agent tokens** — `--force` is what keeps exactly one live token per agent (the old credential is revoked, the fresh plaintext lands under the first free suffix, D17); a plain re-run would stack zombie tokens.
+
+The steps `setup.sh` runs, for reference or piecemeal use:
 
 ```
 make deps        # bun install (workspaces: server, cli, web)
@@ -22,6 +32,8 @@ make install     # wire the board MCP server into local agents + mint their toke
 Tokens by hand (any agent, or scripts): `make token add <name>` (`board token add <name> [--force]`), `board token list`, `board token revoke <name>`. Minting is **CLI-only by design** — no API route ever creates or echoes a token.
 
 ## Run
+
+The shared daemon on `127.0.0.1:7800` is the optional persistent library (D21): nothing auto-spawns it (D10), nothing requires it — agents run session instances ([below](#session-instances-agent-managed)) — and you start it when you want boards that outlive tasks, browsable and reusable across them, or the wired `board_*` MCP tools served.
 
 | Command | What it does |
 |---|---|
@@ -67,7 +79,7 @@ SQLite is the queryable source of truth; the bundle mirrors exist so a board is 
 
 ## Session instances (agent-managed)
 
-D20 gives agents a task-scoped loop they own end to end: `board up` spawns a **throwaway loopback daemon** (an "instance"), the agent drives it over REST/CLI, `board down` tears it down with keepsakes. This is the one place an agent manages a daemon lifecycle — the shared `:7800` daemon and `~/.board` stay human-managed. Multiple instances may run concurrently; nothing about the shared daemon changes.
+D20 gives agents a task-scoped loop they own end to end: `board up` spawns a **throwaway loopback daemon** (an "instance"), the agent drives it over REST/CLI, `board down` tears it down with keepsakes. This is the one place an agent manages a daemon lifecycle — and since D21 it is the **default agent loop** (the shared daemon is the optional library). The shared `:7800` daemon and `~/.board` stay human-managed. Multiple instances may run concurrently; nothing about the shared daemon changes.
 
 | Command | What it does |
 |---|---|
@@ -158,7 +170,7 @@ The keepsake zips are the session-continuity story (D20; owner green-light 2026-
 
 ## Supervised running (systemd, user unit)
 
-The daemon is an always-on user service. `~/.config/systemd/user/board.service`:
+The always-on **opt-in** (D21): for people who want the persistent library permanently available without a foreground process. `~/.config/systemd/user/board.service`:
 
 ```ini
 [Unit]
@@ -179,10 +191,10 @@ WantedBy=default.target
 ```
 systemctl --user daemon-reload
 systemctl --user enable --now board
-loginctl enable-linger $USER   # keep it running after logout (it is meant to be always-on)
+loginctl enable-linger $USER   # keep it running after logout (the point of this opt-in: the library is always there)
 ```
 
-No `BOARD_HOST` override — the default loopback bind is the invariant doing its work. A tmux `make serve` is the informal alternative. This daemon has no auto-spawn magic (D10, D14: agents detect a down daemon via `board_status` and ask you to restart it) — the shared daemon and the persistent data dir stay human-managed. The one agent-managed exception is a throwaway session instance (D20, [above](#session-instances-agent-managed)).
+No `BOARD_HOST` override — the default loopback bind is the invariant doing its work. A tmux `make serve` is the informal alternative. This daemon has no auto-spawn magic (D10) — the shared daemon and the persistent data dir stay human-managed, and per D21 a down daemon does not block agents: they default to a session instance and ask you to start the library only when a task needs it (the skill's guidance).
 
 ## Docker
 

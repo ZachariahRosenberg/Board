@@ -7,7 +7,7 @@ description: Publish plans and results to the shared board for async human revie
 
 ## What boards are
 
-- Shared review artifacts hosted by the always-on board daemon (`127.0.0.1:7800` — the shared daemon; task-scoped session instances are covered below): you publish markdown, the human reads it in a browser and annotates it with anchored comments, you consume the feedback and respond.
+- Shared review artifacts hosted by a board daemon — a task-scoped session instance you spawn yourself (the default, D21) or the shared daemon on `127.0.0.1:7800` (the persistent library; both covered below): you publish markdown, the human reads it in a browser and annotates it with anchored comments, you consume the feedback and respond.
 - The loop is asynchronous. Publish and move on — **never block waiting on the human**. Check for feedback between task steps, not constantly.
 - Boards are append-only and versioned. Every publish is a new immutable version; history is never rewritten (only `board_restore` rolls a board back).
 
@@ -33,10 +33,10 @@ Do NOT board quick factual questions, code review that belongs in diff/PR toolin
 
 ## Shared daemon or session instance?
 
-Pick by lifetime, not preference:
+Pick by lifetime, not preference — the session instance is the default (D21):
 
-- **Shared daemon** (`127.0.0.1:7800`, the MCP tools above) — the always-on surface for **persistent, cross-task boards**. The human owns its lifecycle; you never start or stop it.
-- **Session instance** (D20) — a **task-scoped loopback daemon you own end to end**: `board up` spawns it (OS-temp data dir, random port, one agent token), `board down` tears it down with zip keepsakes. Use it when a task needs its own human review loop — e.g. the shared daemon is down, or the review belongs to this task only and should not outlive it. MCP wiring points at the shared daemon only, so a session is driven via the CLI and REST.
+- **Session instance** (D20) — **the default**: a **task-scoped loopback daemon you own end to end**: `board up` spawns it (OS-temp data dir, random port, one agent token), `board down` tears it down with zip keepsakes. No shared server needed — a task gets its own human review loop that should not outlive it.
+- **Shared daemon** (`127.0.0.1:7800`) — the **optional persistent library** (D21) for **cross-task boards** that outlive a session: browsing or reusing old boards. The human owns its lifecycle; you never start or stop it. The MCP wiring points here, so the `board_*` tools above light up only when it runs; a session is driven via the CLI and REST.
 
 ## Collaborating on a shared board
 
@@ -160,9 +160,9 @@ Thirty iterations at 10 s covers ~5 minutes. If the cap hits with nothing new, g
 3. `board_publish` again with `expected_version` set to the version you just fetched.
 4. Still conflicting after two tries? Stop and surface the conflict to the human instead of looping.
 
-## Daemon down
+## Daemon down (or never started)
 
-`board_status` fails or connections are refused on the shared daemon (`127.0.0.1:7800`): tell the human to start it with `make serve` — you never start, stop, or restart the **shared** daemon. Once it is back up, re-check with `board_status` and continue the loop. The one exception is a task-scoped session instance (above): a daemon you start yourself with `board up` and must end with `board down`.
+Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task, or the `board_*` MCP tools against `127.0.0.1:7800`. Once it is up, re-check with `board_status` and continue.
 
 ## Style
 

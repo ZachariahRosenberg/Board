@@ -1,4 +1,10 @@
-.PHONY: deps install test typecheck lint serve dev token web open list export import smoke up down instances
+.PHONY: setup deps install test typecheck lint serve dev token web open list export import smoke up down instances
+
+# `make setup` — one-command bootstrap (D21): bun check, deps, web build, agent
+# wiring (`install FLAGS=--force`). Never starts the shared daemon: session
+# boards (`make up`) run with no daemon; `make serve` is the optional library.
+setup:
+	bash scripts/setup.sh
 
 deps:
 	bun install

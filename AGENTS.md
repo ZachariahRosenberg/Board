@@ -24,6 +24,7 @@ All targets are live (`make list`/`export`/`import` arrived with M6; session `up
 
 | Task | Command |
 |---|---|
+| One-command setup (new device) | `make setup` (or `./scripts/setup.sh`) — deps + web build + agent wiring; never starts the daemon (D21) |
 | Install deps | `make deps` (wraps `bun install`) |
 | Wire agents (MCP + skill + tokens) | `make install` (`--force` via `make install FLAGS=--force`) |
 | Test | `make test` (wraps `bun test`) |
