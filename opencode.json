@@ -1,7 +1,13 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "manager",
+  "subagent_depth": 2,
+  "model": "fireworks-ai/accounts/fireworks/models/glm-5p3-flash",
   "agent": {
+    "plan": {
+      "mode": "all",
+      "model": "fireworks-ai/accounts/fireworks/models/glm-5p3"
+    },
     "manager": {
       "description": "Orchestrating primary agent — SMART plans, skeptical subagent delegation, measured and proven claims, durable lessons. Use as the default session agent.",
       "mode": "primary",
