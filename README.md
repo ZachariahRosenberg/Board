@@ -56,14 +56,47 @@ skills/   agent skill + board templates
 docs/     this documentation
 ```
 
-## Quickstart
+## Setup (new device)
+
+Six commands from zero to "my agent opened a board." Linux is the supported platform — macOS is untested (session-instance teardown reads `/proc`, and the systemd unit, Docker form, and UI auto-open are Linux-shaped).
+
+Prerequisites:
+
+- Linux; optionally `xdg-open` (auto-opens the UI — the URL prints without it too).
+- git, and [Bun](https://bun.sh) 1.4.x: `curl -fsSL https://bun.sh/install | bash` (no version pin in package.json — keep a current 1.4.x).
+- For the wiring step, at least one harness: opencode and/or claude code (the `claude` CLI on PATH).
+
+Then:
 
 ```
-make deps                  # bun install
-make web                   # build the web app (once, and after UI changes)
-make install               # wire the board MCP server into your agents (mints tokens)
+git clone git@github.com:ZachariahRosenberg/Board.git && cd Board  # the repo
+make deps        # bun install, across the server/cli/web workspaces
+make web         # build the SPA — a fresh clone has no web/dist; without it the UI 404s (web_not_built) while the API stays live
+make install     # wire the board MCP server + skill into your agents, mint their tokens — plaintext is printed once and stored hashed; save them now
+make serve       # foreground daemon on 127.0.0.1:7800 (or the systemd user unit with linger, docs/deployment.md)
+make open        # mint a one-time exchange token and open the UI — if the board list loads, the stack works
+```
+
+What the steps lean on: a down daemon during `make install` is a warning, not a failure (agent configs can be written before first use); claude code without its CLI on PATH gets manual instructions printed instead of automated wiring, and codex/pi always get a TOML snippet to paste. For always-on running, replace the foreground `make serve` with the systemd user unit + linger from [docs/deployment.md](docs/deployment.md).
+
+**Acceptance — this is the point of the guide.** Restart your opencode/claude session (MCP config loads at startup; a running session keeps the old config), then say: *"spin up a board"* (or "put this on a board"). The agent publishes and hands you a link — via its `board_*` MCP tools against the shared daemon, or `make up <file>` for a throwaway session instance (D20), which works even if you skipped `make serve`. A board opening with a link in your terminal or chat: setup is done. Want more confidence first? `make smoke` — the self-verifying 19-step end-to-end loop (two agents + a human) on a temp daemon and scratch ports, never `~/.board`.
+
+## Configuration
+
+The knobs that matter on a new device; [docs/deployment.md](docs/deployment.md) is the full reference.
+
+- **Data** lives in `~/.board` — the SQLite db, event logs, board bundles, and the session-instance registry (`instances/`). Relocate with `BOARD_DATA_DIR`. It is user data; agents never write there directly — all writes go through the daemon's API.
+- **The daemon** listens on `127.0.0.1:7800` (`BOARD_PORT` changes the port). The loopback bind is invariant 1, not a default — never expose the daemon beyond the host. `BOARD_HOST`/`BOARD_BIND` are the explicit, documented opt-outs for Docker agents; the publish-form / Host-allowlist rules in [docs/deployment.md](docs/deployment.md) are what hold the security line there.
+- **Credentials**: tokens are stored hashed and their plaintext is printed once — it cannot be shown again. `make token add <name>` mints, `make token list` inventories, `make token revoke <name>` kills. Names are permanent (D17): `--force` (via `FLAGS=--force`) revokes the old token and re-mints under a suffixed name (`board-<agent>`, `board-<agent>-2`, …). Browser sessions expire after 30 days (D19) — `make open` again.
+- **Session instances** (D20): the registry at `~/.board/instances/<id>/` keeps `instance.json`, `daemon.log`, and a mode-0600 `env` file (`BOARD_INSTANCE`/`BOARD_PORT`/`BOARD_TOKEN` — the one sanctioned plaintext credential, purged at `board down`); teardown keeps zip keepsakes under `boards/`. Driven with `make up` / `make down` / `make instances`.
+
+Full reference — the env-var table, systemd unit, tmux, Docker loopback rules, backups: [docs/deployment.md](docs/deployment.md).
+
+## Day-to-day
+
+```
 make serve                 # daemon on 127.0.0.1:7800
-make open                  # open the web UI in your browser (one-time session token)
+make web                   # rebuild the SPA after UI changes
 make list                  # boards with status, version, unresolved counts
 make export ID=<id>        # self-contained zip bundle of a board
 make import FILE=<id>.zip  # recreate a board from a bundle (D18 quarantine re-runs)
@@ -82,8 +115,6 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"format":"markdown","content":"# Hi\n\nfirst board","expected_version":0}' \
   http://127.0.0.1:7800/api/boards/<id>/publish
 ```
-
-Agent wiring for opencode + claude code: `make install` (auto-mints per-agent tokens, writes the MCP config, installs the skill).
 
 Reference for agents and operators: [docs/api.md](docs/api.md) (every route, tool, error code), [docs/feedback-grammar.md](docs/feedback-grammar.md) (the consumption loop), [docs/anchors.md](docs/anchors.md), [docs/deployment.md](docs/deployment.md).
 
