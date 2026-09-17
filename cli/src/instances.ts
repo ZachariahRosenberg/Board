@@ -27,6 +27,16 @@ import { openDb } from "../../server/src/db.ts";
 import { shortId } from "../../server/src/ids.ts";
 import { LISTEN_LINE } from "../../server/src/main.ts";
 import { createToken } from "../../server/src/tokens.ts";
+import {
+  type InstanceEntry,
+  parseInstanceEnv,
+  parseInstanceJson,
+} from "./instance-registry.ts";
+
+// The registry file formats have one parser (instance-registry.ts) shared
+// with the MCP connector (which imports this module's TYPES, never its Bun
+// mechanics).
+export type { InstanceEntry };
 
 const POLL_MS = 100;
 const READY_TIMEOUT_MS = 10_000;
@@ -38,24 +48,6 @@ export const BOOT_GRACE_MS = 2 * READY_TIMEOUT_MS + 30_000;
 // D20 teardown contract: SIGTERM, then ≤8s of liveness polling, then SIGKILL.
 const TERM_GRACE_MS = 8_000;
 const KILL_GRACE_MS = 2_000;
-
-export interface InstanceEntry {
-  id: string;
-  pid: number;
-  // port/url are absent on the pre-readiness (booting) entry written by the
-  // F3 boot-window guard — they exist only once the daemon is confirmed ready
-  port?: number;
-  url?: string;
-  dataDir: string;
-  agentTokenName: string;
-  createdAt: string;
-  closedAt?: string;
-  // board ids kept as zips under <registry>/boards/ — stamped at teardown
-  boards?: string[];
-  // set ONLY on the minimal entry written before readiness completes (F3);
-  // the full entry overwrites it atomically on success
-  booting?: true;
-}
 
 // The COMPLETE entry: written once readiness is confirmed (F3). spawnInstance
 // resolves to this shape, so callers (smoke.ts, runUp) keep non-optional
@@ -193,8 +185,10 @@ export function listRegistryEntries(dataDir: string): RegistryEntry[] {
 }
 
 export function readInstanceEntry(paths: InstancePaths): InstanceEntry | null {
+  // The parse itself lives in instance-registry.ts (shared with the MCP
+  // connector); this wrapper keeps the call sites' paths-shaped signature.
   try {
-    return JSON.parse(readFileSync(paths.json, "utf8")) as InstanceEntry;
+    return parseInstanceJson(readFileSync(paths.json, "utf8"));
   } catch {
     return null;
   }
@@ -236,8 +230,7 @@ export function writeEnvFile(
 
 export function readEnvToken(paths: InstancePaths): string | null {
   try {
-    const text = readFileSync(paths.env, "utf8");
-    return /^export BOARD_TOKEN=(\S+)$/m.exec(text)?.[1] ?? null;
+    return parseInstanceEnv(readFileSync(paths.env, "utf8")).token ?? null;
   } catch {
     return null;
   }

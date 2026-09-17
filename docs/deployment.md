@@ -22,18 +22,39 @@ make install     # wire the board MCP server into local agents + mint their toke
 
 `make install` (→ `bun run cli/src/main.ts install`, flags via `make install FLAGS="--agents … --force"`):
 
-- Probes `GET /api/health` first (a down daemon is a warning, not a failure).
+- Probes `GET /api/health` first (a down daemon is a warning, not a failure — and since D22 wiring works regardless: the local connector lists the board tools offline, and its tool calls explain how to start a server when one is needed).
 - Mints one agent token per target agent, named `board-<agent>`. The plaintext is **printed once** — it is stored SHA-256 and cannot be shown again (invariant 7/8). Lost it? Re-mint.
-- Wires **opencode**: comment-preserving merge of an `mcp.board` entry (remote, `http://127.0.0.1:7800/mcp`, bearer header) into `~/.config/opencode/opencode.jsonc`, plus the skill copied to `~/.config/opencode/skills/board/`.
-- Wires **claude code**: `claude mcp add --transport http --scope user board http://127.0.0.1:7800/mcp --header "Authorization: Bearer …"` plus the skill at `~/.claude/skills/board/`.
-- **codex / pi**: prints a TOML snippet to paste (no automated wiring) and copies the skill to `~/.agents/skills/board/`.
+- Wires **opencode**: comment-preserving merge of an `mcp.board` entry into `~/.config/opencode/opencode.jsonc`, plus the skill copied to `~/.config/opencode/skills/board/`. Since D22 the entry is a **local stdio command** — opencode spawns the connector, which resolves a real board server per request — not a remote URL:
+
+  ```jsonc
+  "board": {
+    "type": "local",
+    "command": ["node", "<repo>/cli/src/mcp-connector.ts"],
+    "enabled": true,
+    "timeout": 60000,
+    "environment": { "BOARD_MCP_TOKEN": "<token>" }
+  }
+  ```
+
+  The repo root in the command is absolute, derived from the installer's own module location — not your shell's cwd — and bare `node` is deliberate: agent harness PATHs have node, not reliably bun.
+- Wires **claude code**: stdio form via the CLI — `claude mcp add --scope user board --env BOARD_MCP_TOKEN=<token> -- node <repo>/cli/src/mcp-connector.ts` — plus the skill at `~/.claude/skills/board/`.
+- **codex / pi**: prints a command-form TOML snippet to paste (no automated wiring) and copies the skill to `~/.agents/skills/board/`:
+
+  ```toml
+  [mcp_servers.board]
+  command = "node"
+  args = ["<repo>/cli/src/mcp-connector.ts"]
+  env = { "BOARD_MCP_TOKEN" = "<board-<agent>-token>" }
+  ```
+
+- **The connector (D22)** — what all four wirings point at: a stdio MCP server (`board mcp` / `node cli/src/mcp-connector.ts`) that answers `initialize`/`ping` locally, lists the 13 tools **offline** from the shared manifest, and resolves a real backend per request — the shared daemon when healthy with `BOARD_MCP_TOKEN` set, else the newest healthy session instance from the D20 registry (loopback-only, credential from the instance env file), else an honest error explaining how to start one. It never auto-spawns a daemon, so the wired `board_*` tools work against **any** running board server — session instances included.
 - `--force` re-mints a taken token name — names are permanent (D17): the old token is revoked and the fresh one lands under the first free suffix (`board-<agent>`, `board-<agent>-2`, …).
 
 Tokens by hand (any agent, or scripts): `make token add <name>` (`board token add <name> [--force]`), `board token list`, `board token revoke <name>`. Minting is **CLI-only by design** — no API route ever creates or echoes a token.
 
 ## Run
 
-The shared daemon on `127.0.0.1:7800` is the optional persistent library (D21): nothing auto-spawns it (D10), nothing requires it — agents run session instances ([below](#session-instances-agent-managed)) — and you start it when you want boards that outlive tasks, browsable and reusable across them, or the wired `board_*` MCP tools served.
+The shared daemon on `127.0.0.1:7800` is the optional persistent library (D21): nothing auto-spawns it (D10), nothing requires it — agents run session instances ([below](#session-instances-agent-managed)) — and you start it when you want boards that outlive tasks, browsable and reusable across them, or the wired `board_*` MCP tools proxied to it (the D22 connector prefers it while it is healthy with its token).
 
 | Command | What it does |
 |---|---|

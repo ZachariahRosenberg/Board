@@ -1,9 +1,11 @@
 // M7 final smoke + M8 session wave (docs/plan.md "Milestones"): one command,
 // full loop, self-verifying. Steps 1–15 walk the feedback-grammar loop
 // (docs/feedback-grammar.md) as three principals against a throwaway daemon;
-// steps 16–19 drive the D20 session-instance loop the way an agent does —
+// steps 16–20 drive the D20 session-instance loop the way an agent does —
 // through the real CLI (`board up` → REST iterate → `board instances` →
-// `board down`) with BOARD_DATA_DIR pointed at this smoke's temp registry.
+// `board down`) with BOARD_DATA_DIR pointed at this smoke's temp registry —
+// and step 19 proves the D22 stdio connector (spawned as plain `node`, no bun
+// on PATH) resolves the live session instance over MCP.
 // Temp data dir + scratch ports throughout (never the real ~/.board or :7800
 // — AGENTS.md invariant); asserts every step; prints SMOKE PASS/FAIL, exits
 // 0/1.
@@ -13,7 +15,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type InstancePaths,
   instancePaths,
@@ -167,6 +169,12 @@ const SESSION_MD_V2 = SESSION_MD.replace(
   "got the human sign-off",
 );
 
+// Step 19's connector publish — v3 lands through the D22 stdio connector.
+const SESSION_MD_V3 = SESSION_MD_V2.replace(
+  "got the human sign-off",
+  "got the human sign-off — v3 published through the D22 MCP connector",
+);
+
 // The `board up` output contract (the same lines cli/src/instances.test.ts
 // parses): id/url/token/env/human-link, plus the board id from the link.
 interface InstanceUp {
@@ -215,6 +223,76 @@ function parseInstanceUp(stdout: string): InstanceUp {
 function payloadId(ev: BoardEvent | null | undefined, key: string): string {
   const value = ev?.payload[key];
   return typeof value === "string" ? value : "";
+}
+
+// The D22 connector acceptance driver: spawn the REAL stdio connector the way
+// agent harnesses do (plain `node`, no bun anywhere on the child's PATH — the
+// wave-1 constraint that keeps the connector node-runnable), speak
+// newline-delimited JSON-RPC, and tear it down at EOF. Every reply is
+// deadline-bounded so a silent connector fails the step instead of hanging
+// the smoke.
+function startConnector(env: Record<string, string>) {
+  const node = Bun.which("node");
+  assert(
+    node !== null,
+    "node not found on PATH — the D22 connector wiring needs it",
+  );
+  const proc = Bun.spawn(
+    [node, join(import.meta.dir, "..", "cli", "src", "mcp-connector.ts")],
+    { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+  );
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  async function nextLine(): Promise<string> {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const idx = buffer.indexOf("\n");
+      if (idx !== -1) {
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        if (line.trim().length > 0) {
+          return line;
+        }
+        continue; // skip empty framing lines
+      }
+      if (Date.now() > deadline) {
+        throw new Error("connector did not answer within 10s");
+      }
+      const chunk = (await Promise.race([
+        reader.read(),
+        new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1_000)),
+      ])) as Awaited<ReturnType<typeof reader.read>> | "timeout";
+      if (chunk === "timeout") {
+        continue;
+      }
+      if (chunk.done) {
+        throw new Error("connector stdout closed before a reply");
+      }
+      buffer += decoder.decode(chunk.value, { stream: true });
+    }
+  }
+
+  return {
+    // One JSON-RPC request → the parsed response line.
+    async rpc(
+      id: number,
+      method: string,
+      params?: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      proc.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) })}\n`,
+      );
+      proc.stdin.flush();
+      return JSON.parse(await nextLine()) as Record<string, unknown>;
+    },
+    // Tear down: EOF on stdin is the connector's clean-shutdown path.
+    async end(): Promise<number> {
+      proc.stdin.end();
+      return (await proc.exited) ?? -1;
+    },
+  };
 }
 
 async function run(): Promise<0 | 1> {
@@ -912,6 +990,131 @@ async function run(): Promise<0 | 1> {
         `instance ${session.id} not listed live:\n${res.stdout}`,
       );
     });
+
+    await step(
+      "connector: MCP over the session instance (node, no bun on PATH)",
+      async () => {
+        // The child env mirrors the real opencode spawn (D22): node available,
+        // bun stripped from PATH (the connector is node-runnable by design),
+        // BOARD_* pointing at this smoke's temp registry. No BOARD_MCP_TOKEN —
+        // the smoke daemon has no wired shared credential here, so resolution
+        // takes the D22 instance path: newest healthy session instance first.
+        const bunDir =
+          Bun.which("bun") !== null
+            ? dirname(Bun.which("bun") as string)
+            : null;
+        const pathNoBun = (process.env.PATH ?? "")
+          .split(":")
+          .filter((p) => p.length > 0 && (bunDir === null || p !== bunDir))
+          .join(":");
+        assert(
+          pathNoBun.length > 0,
+          "PATH without bun resolved empty — cannot spawn the connector",
+        );
+        const connEnv: Record<string, string> = {};
+        for (const [k, v] of Object.entries(process.env)) {
+          if (v !== undefined) {
+            connEnv[k] = v;
+          }
+        }
+        connEnv.BOARD_DATA_DIR = dataDir;
+        connEnv.BOARD_HOST = "127.0.0.1";
+        connEnv.BOARD_PORT = String(new URL(baseUrl).port);
+        connEnv.PATH = pathNoBun;
+        delete connEnv.BOARD_MCP_TOKEN;
+        delete connEnv.BOARD_INSTANCE;
+        delete connEnv.BOARD_TOKEN;
+
+        const conn = startConnector(connEnv);
+        let exitCode = -1;
+        try {
+          const init = await conn.rpc(1, "initialize", {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "board-smoke", version: "0" },
+          });
+          const initResult = init.result as
+            | { serverInfo?: { name?: string; version?: string } }
+            | undefined;
+          assert(
+            init.id === 1 &&
+              initResult?.serverInfo?.name === "board" &&
+              typeof initResult.serverInfo.version === "string",
+            `initialize handshake unexpected: ${JSON.stringify(init).slice(0, 300)}`,
+          );
+          const list = await conn.rpc(2, "tools/list");
+          const tools = (
+            list.result as { tools: Array<{ name: string }> } | undefined
+          )?.tools;
+          assert(
+            list.id === 2 && tools !== undefined && tools.length === 13,
+            `offline tools/list should carry the 13-tool manifest, got ${tools?.length ?? "none"}`,
+          );
+          assert(
+            tools.some((t) => t.name === "board_publish"),
+            `board_publish missing from the offline manifest: ${JSON.stringify(tools.map((t) => t.name))}`,
+          );
+          const call = await conn.rpc(3, "tools/call", {
+            name: "board_publish",
+            arguments: {
+              board_id: session.boardId,
+              format: "markdown",
+              content: SESSION_MD_V3,
+              expected_version: 2,
+              label: "via the D22 connector",
+            },
+          });
+          const result = call.result as
+            | {
+                isError?: boolean;
+                content: Array<{ type: string; text: string }>;
+              }
+            | undefined;
+          assert(
+            call.id === 3 && result !== undefined,
+            `no tools/call response: ${JSON.stringify(call).slice(0, 300)}`,
+          );
+          assert(
+            result?.isError !== true,
+            `board_publish via connector errored: ${result?.content[0]?.text ?? "(no content)"}`,
+          );
+          const published = JSON.parse(result.content[0].text) as {
+            board_id: string;
+            n: number;
+          };
+          assert(
+            published.board_id === session.boardId && published.n === 3,
+            `connector publish should be v3 on the session board, got: ${JSON.stringify(published)}`,
+          );
+          // It landed on the SESSION instance, not the smoke daemon: the board
+          // id only exists there — read it back over that instance's REST.
+          const envToken = readEnvToken(instancePaths(dataDir, session.id));
+          assert(envToken !== null, "session env file lost its token mid-step");
+          const vres = await fetch(
+            `${session.url}/api/boards/${session.boardId}`,
+            { headers: { authorization: `Bearer ${envToken ?? ""}` } },
+          );
+          assert(
+            vres.status === 200,
+            `board read back after connector publish: HTTP ${vres.status}`,
+          );
+          const view = (await vres.json()) as {
+            board: { current_version: number };
+          };
+          assert(
+            view.board.current_version === 3,
+            `session board should be at v3 after the connector publish, got ${view.board.current_version}`,
+          );
+        } finally {
+          // ALWAYS tear the connector down — EOF on stdin, clean exit expected.
+          exitCode = await conn.end();
+        }
+        assert(
+          exitCode === 0,
+          `connector should exit 0 on stdin EOF, got ${exitCode}`,
+        );
+      },
+    );
 
     await step(
       "board down — keepsake zip, env + temp purge, port closed",

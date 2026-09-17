@@ -36,7 +36,7 @@ Do NOT board quick factual questions, code review that belongs in diff/PR toolin
 Pick by lifetime, not preference — the session instance is the default (D21):
 
 - **Session instance** (D20) — **the default**: a **task-scoped loopback daemon you own end to end**: `board up` spawns it (OS-temp data dir, random port, one agent token), `board down` tears it down with zip keepsakes. No shared server needed — a task gets its own human review loop that should not outlive it.
-- **Shared daemon** (`127.0.0.1:7800`) — the **optional persistent library** (D21) for **cross-task boards** that outlive a session: browsing or reusing old boards. The human owns its lifecycle; you never start or stop it. The MCP wiring points here, so the `board_*` tools above light up only when it runs; a session is driven via the CLI and REST.
+- **Shared daemon** (`127.0.0.1:7800`) — the **optional persistent library** (D21) for **cross-task boards** that outlive a session: browsing or reusing old boards. The human owns its lifecycle; you never start or stop it. The MCP wiring is the local connector (D22): the `board_*` tools are always listed, and a call lands on this daemon while it runs (it is preferred when healthy with the wired token); a session is still driven via the CLI and REST.
 
 ## Collaborating on a shared board
 
@@ -162,7 +162,7 @@ Thirty iterations at 10 s covers ~5 minutes. If the cap hits with nothing new, g
 
 ## Daemon down (or never started)
 
-Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task, or the `board_*` MCP tools against `127.0.0.1:7800`. Once it is up, re-check with `board_status` and continue.
+The `board_*` tools are always listed — the local connector (D22) answers `tools/list` offline. A tool call resolves a backend per request: the shared daemon while it runs (with the wired token), else your newest live session instance, else an honest error telling you how to start a server. Default to a session instance (above): for a normal task do not wait on the shared daemon — `board up` gives you your own board, token, and one-time human link with nothing to ask for. Ask the human to start the shared daemon (`make serve` — you never start, stop, or restart the **shared** daemon) only when the task specifically needs the persistent library: browsing or reusing old boards, boards that outlive the task. Once it is up, re-check with `board_status` and continue. The session loop itself stays REST/CLI-canonical (the env-file workflow above).
 
 ## Style
 

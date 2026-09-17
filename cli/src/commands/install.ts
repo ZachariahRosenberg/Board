@@ -23,10 +23,25 @@ import {
 } from "../../../server/src/tokens.ts";
 import type { CommandIo } from "./token.ts";
 
-export const BOARD_MCP_URL = "http://127.0.0.1:7800/mcp";
 const BOARD_HEALTH_URL = "http://127.0.0.1:7800/api/health";
 export const INSTALL_USAGE =
   "usage: board install [--agents opencode,claude,codex,pi] [--force]";
+
+// The D22 stdio connector (wave 2): what agent harnesses actually spawn, so
+// MCP is available whenever ANY board server is up (shared daemon or a D20
+// session instance) — not only when the shared daemon runs. REPO_ROOT derives
+// from this module's own location (import.meta.url via import.meta.dir), never
+// the cwd — `make install` may run from anywhere. Bare "node" matches the
+// working playwright MCP precedent on this machine: opencode's env PATH has
+// node but not reliably bun, which is why the connector is node-runnable.
+const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
+export const MCP_CONNECTOR_COMMAND = "node";
+export const MCP_CONNECTOR_PATH = join(
+  REPO_ROOT,
+  "cli",
+  "src",
+  "mcp-connector.ts",
+);
 
 const AGENTS = ["opencode", "claude", "codex", "pi"] as const;
 type Agent = (typeof AGENTS)[number];
@@ -174,10 +189,17 @@ export class OpencodeConfigError extends Error {
 }
 
 interface BoardMcpEntry {
-  type: "remote";
-  url: string;
+  // Local stdio entry (D22): opencode spawns the connector itself; the token
+  // rides `environment` (plaintext in agent config — the same exposure class
+  // D17/D20 accept) instead of an HTTP header, because the connector owns the
+  // per-request backend resolution.
+  type: "local";
+  command: string[];
   enabled: boolean;
-  headers: { Authorization: string };
+  // opencode's local-server default (5s per its schema) is shorter than a
+  // board_publish render; 60000 matches the connector's PROXY_TIMEOUT_MS.
+  timeout: number;
+  environment: { BOARD_MCP_TOKEN: string };
 }
 
 // Comment-preserving merge into opencode.jsonc: modify computes a surgical
@@ -206,8 +228,8 @@ export function mergeOpencodeConfig(
   return applyEdits(text, edits);
 }
 
-function manualHeader(agent: Agent): string {
-  return `Authorization: Bearer <board-${agent}-token> (replace with the token printed above)`;
+function manualTokenNote(agent: Agent): string {
+  return `BOARD_MCP_TOKEN=<board-${agent}-token> (replace with the token printed above)`;
 }
 
 function wireOpencode(token: string, io: CommandIo): boolean {
@@ -220,10 +242,11 @@ function wireOpencode(token: string, io: CommandIo): boolean {
     "SKILL.md",
   );
   const entry: BoardMcpEntry = {
-    type: "remote",
-    url: BOARD_MCP_URL,
+    type: "local",
+    command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
     enabled: true,
-    headers: { Authorization: `Bearer ${token}` },
+    timeout: 60000,
+    environment: { BOARD_MCP_TOKEN: token },
   };
   let ok = true;
   try {
@@ -240,28 +263,31 @@ function wireOpencode(token: string, io: CommandIo): boolean {
       `board: could not merge the board MCP entry into ${configPath} (${err instanceof Error ? err.message : String(err)}); add it manually under "mcp":`,
     );
     io.stderr(`  "board": {`);
-    io.stderr(`    "type": "remote",`);
-    io.stderr(`    "url": "${BOARD_MCP_URL}",`);
-    io.stderr(`    "enabled": true,`);
+    io.stderr(`    "type": "local",`);
     io.stderr(
-      `    "headers": { "Authorization": "Bearer <board-opencode-token>" }`,
+      `    "command": ["${MCP_CONNECTOR_COMMAND}", "${MCP_CONNECTOR_PATH}"],`,
+    );
+    io.stderr(`    "enabled": true,`);
+    io.stderr(`    "timeout": 60000,`);
+    io.stderr(
+      `    "environment": { "BOARD_MCP_TOKEN": "<board-opencode-token>" }`,
     );
     io.stderr(`  }`);
-    io.stderr(`  (${manualHeader("opencode")})`);
+    io.stderr(`  (${manualTokenNote("opencode")})`);
   }
   return copySkill(skillDest, io) && ok;
 }
 
 function printClaudeManual(io: CommandIo): void {
   io.stdout(
-    "claude CLI not found on PATH or `claude mcp add` failed; add the board server manually:",
+    "claude CLI not found on PATH or `claude mcp add` failed; add the board connector manually:",
   );
   io.stdout(
-    `  claude mcp add --transport http --scope user board ${BOARD_MCP_URL} --header "Authorization: Bearer <board-claude-token>"`,
+    `  claude mcp add --scope user board --env BOARD_MCP_TOKEN=<board-claude-token> -- ${MCP_CONNECTOR_COMMAND} ${MCP_CONNECTOR_PATH}`,
   );
   io.stdout(
     "  (--scope user makes the server available in all projects; " +
-      manualHeader("claude") +
+      manualTokenNote("claude") +
       ")",
   );
 }
@@ -274,17 +300,20 @@ function wireClaude(
 ): boolean {
   let ok = true;
   if (claudeOnPath()) {
+    // Stdio form (D22): the real `claude mcp add` syntax — name, then
+    // `--env KEY=value`, then `--` and the connector command (transport
+    // defaults to stdio). Verified against `claude mcp add --help`.
     const args = [
       "mcp",
       "add",
-      "--transport",
-      "http",
       "--scope",
       "user",
       "board",
-      BOARD_MCP_URL,
-      "--header",
-      `Authorization: Bearer ${token}`,
+      "--env",
+      `BOARD_MCP_TOKEN=${token}`,
+      "--",
+      MCP_CONNECTOR_COMMAND,
+      MCP_CONNECTOR_PATH,
     ];
     try {
       if (runClaude(args) === 0) {
@@ -318,11 +347,10 @@ function wireTomlAgent(agent: Agent, io: CommandIo): boolean {
     );
   }
   io.stdout(`  [mcp_servers.board]`);
-  io.stdout(`  url = "${BOARD_MCP_URL}"`);
-  io.stdout(
-    `  http_headers = { "Authorization" = "Bearer <board-${agent}-token>" }`,
-  );
-  io.stdout(`  (${manualHeader(agent)})`);
+  io.stdout(`  command = "${MCP_CONNECTOR_COMMAND}"`);
+  io.stdout(`  args = ["${MCP_CONNECTOR_PATH}"]`);
+  io.stdout(`  env = { "BOARD_MCP_TOKEN" = "<board-${agent}-token>" }`);
+  io.stdout(`  (${manualTokenNote(agent)})`);
   return copySkill(
     join(homeDir(), ".agents", "skills", "board", "SKILL.md"),
     io,
@@ -394,8 +422,11 @@ export function runInstallCommand({
   }
   const { agents, force } = parsed;
   if (!checkHealth()) {
+    // D22: a down daemon barely matters for wiring — the connector lists the
+    // tools offline and its tool calls explain how to start a server; the
+    // shared daemon is only the persistent library (D21).
     io.stderr(
-      "board: warning: daemon not running — start it with `make serve` (continuing; agent configs can be written before first use)",
+      "board: warning: shared daemon not running — wiring works regardless (the connector lists the board tools offline, and each tool call explains how to start a server); `make serve` is only needed for the persistent library (D21)",
     );
   }
   const failed: Agent[] = [];

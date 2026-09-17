@@ -3,12 +3,17 @@
 // never distinguishes MCP agents from REST agents. Transport is the SDK's
 // web-standard server transport in stateless JSON mode: every POST gets a
 // fresh server + transport (no sessions), responses are application/json,
-// and no SSE stream is ever held open on the daemon.
+// and no SSE stream is ever held open on the daemon. Tool METADATA (names,
+// descriptions, schemas) lives in mcp-tools.ts — the manifest the agent-side
+// stdio connector also reads; this file owns the handlers.
 import type { Database } from "bun:sqlite";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  type ToolCallback,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import type { ZodRawShape } from "zod";
 import { ingestAssetFromPath } from "./assets.ts";
 import { resolveActor, resolveRequestToken } from "./auth.ts";
 import { buildBundle } from "./bundle.ts";
@@ -21,6 +26,12 @@ import {
 } from "./comments.ts";
 import type { Actor } from "./domain.ts";
 import { HttpError, readJsonBody } from "./http.ts";
+import {
+  MCP_SERVER_NAME,
+  MCP_SERVER_VERSION,
+  MCP_TOOLS,
+  type McpToolName,
+} from "./mcp-tools.ts";
 import { filterBoards } from "./routes/boards.ts";
 import {
   BoardNotFound,
@@ -35,11 +46,6 @@ import {
   VersionConflict,
 } from "./store.ts";
 import { subscribeWebhook } from "./webhooks.ts";
-
-const MCP_SERVER_NAME = "board";
-// Consumed by the SDK handshake: it rides the initialize response's
-// serverInfo.version (clients read it as getServerVersion()).
-const MCP_SERVER_VERSION = "0.7.0";
 
 // MCP export carries the zip base64-encoded through JSON (≈ ×4/3 inflation).
 // The daemon's 8 MB body-cap convention bounds it: bigger bundles go through
@@ -128,207 +134,160 @@ function versionMetaResult(
   });
 }
 
+// Handler argument shapes, type-only. The RUNTIME validation is the
+// manifest's zod schema (the SDK parses tool arguments against it before the
+// callback runs — mcp.js validateToolInput); ToolArgs mirrors it so each
+// handler keeps destructured, typed params. Drift between the two surfaces
+// as argument-validation failures in the end-to-end tool tests.
+interface ToolArgs {
+  board_create: {
+    title: string;
+    format: "markdown" | "html";
+    tags?: string[];
+  };
+  board_publish: {
+    board_id: string;
+    format: "markdown" | "html";
+    content: string;
+    expected_version: number;
+    label?: string;
+    note?: string;
+  };
+  board_list: { status?: "open" | "ended"; tag?: string; author?: string };
+  board_get: { board_id: string };
+  board_get_comments: { board_id: string; since: number };
+  board_reply: { comment_id: string; body: string };
+  board_resolve: { comment_id: string };
+  board_restore: {
+    board_id: string;
+    from_n: number;
+    expected_version: number;
+  };
+  board_end: { board_id: string };
+  board_subscribe: {
+    board_id: string;
+    webhook_url: string;
+    webhook_secret?: string;
+  };
+  board_status: { board_id?: string };
+  board_upload_image: { board_id: string; path: string };
+  board_export: { board_id: string };
+}
+
+// Handlers under the same keys as the manifest, built per-request context.
 // The service layer is async for publish/restore (render pipeline) and sync
 // everywhere else; handlers await uniformly.
-function registerBoardTools(
-  server: McpServer,
-  db: Database,
-  dataDir: string,
-  actor: Actor,
-): void {
-  server.registerTool(
-    "board_create",
-    {
-      description:
-        "Open a new board with a title, an optional format, and optional tags.",
-      inputSchema: {
-        title: z.string().min(1),
-        format: z.enum(["markdown", "html"]).default("markdown"),
-        tags: z.array(z.string()).optional(),
-      },
-    },
+const TOOL_HANDLERS: {
+  [K in McpToolName]: (
+    ctx: McpContext,
+  ) => (args: ToolArgs[K]) => CallToolResult | Promise<CallToolResult>;
+} = {
+  board_create:
+    (ctx) =>
     ({ title, format, tags }) =>
       run(() =>
         textResult(
-          createBoard(db, dataDir, {
+          createBoard(ctx.db, ctx.dataDir, {
             title,
             format,
             tags,
-            actor: actor.name,
+            actor: ctx.actor.name,
           }),
         ),
       ),
-  );
-
-  server.registerTool(
-    "board_publish",
-    {
-      description:
-        "Publish content to a board as a new immutable version, failing with current_version on a stale expected_version.",
-      inputSchema: {
-        board_id: z.string(),
-        format: z.enum(["markdown", "html"]),
-        content: z.string(),
-        expected_version: z.number().int(),
-        label: z.string().optional(),
-        note: z.string().optional(),
-      },
-    },
+  board_publish:
+    (ctx) =>
     ({ board_id, format, content, expected_version, label, note }) =>
       run(async () => {
-        const version = await publishVersion(db, dataDir, board_id, {
+        const version = await publishVersion(ctx.db, ctx.dataDir, board_id, {
           format,
           content,
           expected_version,
           label,
           note,
-          actor: actor.name,
+          actor: ctx.actor.name,
         });
         return versionMetaResult(version, Buffer.byteLength(content, "utf8"));
       }),
-  );
-
-  server.registerTool(
-    "board_list",
-    {
-      description:
-        "List boards with unresolved comment counts, optionally filtered by status, tag, or author.",
-      inputSchema: {
-        status: z.enum(["open", "ended"]).optional(),
-        tag: z.string().optional(),
-        author: z.string().optional(),
-      },
-    },
+  board_list:
+    (ctx) =>
     ({ status, tag, author }) =>
       run(() =>
-        textResult(filterBoards(boardsWithCounts(db), { status, tag, author })),
+        textResult(
+          filterBoards(boardsWithCounts(ctx.db), { status, tag, author }),
+        ),
       ),
-  );
-
-  server.registerTool(
-    "board_get",
-    {
-      description: "Get a board with its full version metadata list.",
-      inputSchema: { board_id: z.string() },
-    },
+  board_get:
+    (ctx) =>
     ({ board_id }) =>
       run(() => {
-        const board = requireBoard(db, board_id);
-        return textResult({ board, versions: listVersions(db, board_id) });
+        const board = requireBoard(ctx.db, board_id);
+        return textResult({
+          board,
+          versions: listVersions(ctx.db, board_id),
+        });
       }),
-  );
-
-  server.registerTool(
-    "board_get_comments",
-    {
-      description:
-        "Fetch comments with anchors and resolve state since a seq cursor — the one feedback consumption path; polls count as presence.",
-      inputSchema: {
-        board_id: z.string(),
-        since: z.number().int().nonnegative().default(0),
-      },
-    },
+  board_get_comments:
+    (ctx) =>
     ({ board_id, since }) =>
-      run(() => textResult(listCommentsPage(db, board_id, actor, since))),
-  );
-
-  server.registerTool(
-    "board_reply",
-    {
-      description: "Reply in-thread to a comment, inheriting its anchor.",
-      inputSchema: {
-        comment_id: z.string(),
-        body: z.string(),
-      },
-    },
+      run(() =>
+        textResult(listCommentsPage(ctx.db, board_id, ctx.actor, since)),
+      ),
+  board_reply:
+    (ctx) =>
     ({ comment_id, body }) =>
       run(() =>
         textResult(
-          replyComment(db, dataDir, comment_id, { body, actor: actor.name }),
+          replyComment(ctx.db, ctx.dataDir, comment_id, {
+            body,
+            actor: ctx.actor.name,
+          }),
         ),
       ),
-  );
-
-  server.registerTool(
-    "board_resolve",
-    {
-      description:
-        "Mark a comment resolved once its feedback is actually addressed.",
-      inputSchema: { comment_id: z.string() },
-    },
+  board_resolve:
+    (ctx) =>
     ({ comment_id }) =>
       run(() =>
-        textResult(resolveComment(db, dataDir, comment_id, actor.name)),
+        textResult(
+          resolveComment(ctx.db, ctx.dataDir, comment_id, ctx.actor.name),
+        ),
       ),
-  );
-
-  server.registerTool(
-    "board_restore",
-    {
-      description:
-        "Republish an old version as a new one, keeping history linear.",
-      inputSchema: {
-        board_id: z.string(),
-        from_n: z.number().int(),
-        expected_version: z.number().int(),
-      },
-    },
+  board_restore:
+    (ctx) =>
     ({ board_id, from_n, expected_version }) =>
       run(async () =>
         textResult(
-          await restoreVersion(db, dataDir, board_id, {
+          await restoreVersion(ctx.db, ctx.dataDir, board_id, {
             from_n,
             expected_version,
-            actor: actor.name,
+            actor: ctx.actor.name,
           }),
         ),
       ),
-  );
-
-  server.registerTool(
-    "board_end",
-    {
-      description: "End a board, making it read-only for all further writes.",
-      inputSchema: { board_id: z.string() },
-    },
+  board_end:
+    (ctx) =>
     ({ board_id }) =>
-      run(() => textResult(endBoard(db, dataDir, board_id, actor.name))),
-  );
-
-  server.registerTool(
-    "board_subscribe",
-    {
-      description:
-        "Register a webhook URL that receives signed board events as they are appended; re-subscribing replaces the previous URL.",
-      inputSchema: {
-        board_id: z.string(),
-        webhook_url: z.string(),
-        webhook_secret: z.string().optional(),
-      },
-    },
+      run(() =>
+        textResult(endBoard(ctx.db, ctx.dataDir, board_id, ctx.actor.name)),
+      ),
+  board_subscribe:
+    (ctx) =>
     ({ board_id, webhook_url, webhook_secret }) =>
       run(() =>
         textResult(
-          subscribeWebhook(db, dataDir, board_id, {
+          subscribeWebhook(ctx.db, ctx.dataDir, board_id, {
             webhook_url,
             webhook_secret,
-            actor: actor.name,
+            actor: ctx.actor.name,
           }),
         ),
       ),
-  );
-
-  server.registerTool(
-    "board_status",
-    {
-      description:
-        "Report daemon liveness plus board and subscriber counts, optionally for one board.",
-      inputSchema: { board_id: z.string().optional() },
-    },
+  board_status:
+    (ctx) =>
     ({ board_id }) =>
       run(() => {
-        const boards = listBoards(db);
-        const subscribers = db
+        const boards = listBoards(ctx.db);
+        const subscribers = ctx.db
           .prepare("SELECT COUNT(*) AS c FROM subscribers")
           .get() as { c: number };
         const status: Record<string, unknown> = {
@@ -340,33 +299,23 @@ function registerBoardTools(
           subscribers: subscribers.c,
         };
         if (board_id !== undefined) {
-          const board = requireBoard(db, board_id);
+          const board = requireBoard(ctx.db, board_id);
           status.board = {
             id: board.id,
             status: board.status,
             current_version: board.current_version,
-            unresolved_comments: countUnresolvedRoots(db, board.id),
+            unresolved_comments: countUnresolvedRoots(ctx.db, board.id),
           };
         }
         return textResult(status);
       }),
-  );
-
-  server.registerTool(
-    "board_upload_image",
-    {
-      description:
-        "Copy a local image file (absolute path on the daemon's host) into a board as a verified, sanitized asset. Returns the asset id plus ready-to-paste embed snippets.",
-      inputSchema: {
-        board_id: z.string(),
-        path: z.string().min(1),
-      },
-    },
+  board_upload_image:
+    (ctx) =>
     ({ board_id, path }) =>
       run(() => {
-        const asset = ingestAssetFromPath(db, dataDir, board_id, {
+        const asset = ingestAssetFromPath(ctx.db, ctx.dataDir, board_id, {
           path,
-          actor: actor.name,
+          actor: ctx.actor.name,
         });
         return textResult({
           asset_id: asset.id,
@@ -377,19 +326,12 @@ function registerBoardTools(
           embed_html: `<img src="/assets/${asset.id}">`,
         });
       }),
-  );
-
-  server.registerTool(
-    "board_export",
-    {
-      description:
-        "Export a board as a self-contained zip bundle (manifest, version sources, comments, assets, event audit snapshot), base64-encoded in the `data` field of the result — decode it and save as <board_id>.zip. Works on ended boards; bundles over 8 MB must use REST GET /api/boards/:id/export instead.",
-      inputSchema: { board_id: z.string() },
-    },
+  board_export:
+    (ctx) =>
     ({ board_id }) =>
       run(() => {
-        requireBoard(db, board_id);
-        const zip = buildBundle(db, dataDir, board_id);
+        requireBoard(ctx.db, board_id);
+        const zip = buildBundle(ctx.db, ctx.dataDir, board_id);
         if (zip.byteLength > MCP_EXPORT_MAX_BYTES) {
           throw new StoreError(
             `bundle for board "${board_id}" is ${zip.byteLength} bytes, over the ${MCP_EXPORT_MAX_BYTES} byte MCP export cap — use REST GET /api/boards/${board_id}/export`,
@@ -402,7 +344,22 @@ function registerBoardTools(
           data: Buffer.from(zip).toString("base64"),
         });
       }),
-  );
+};
+
+function registerBoardTools(server: McpServer, ctx: McpContext): void {
+  for (const tool of MCP_TOOLS) {
+    server.registerTool(
+      tool.name,
+      { description: tool.description, inputSchema: tool.inputSchema },
+      // Bounded cast: registerTool's overloads infer the callback's arg type
+      // from a schema expression at the call site, but the dynamic loop hands
+      // it the widened ZodRawShape. TOOL_HANDLERS is keyed by the same
+      // McpToolName union as the manifest, and the SDK validates arguments
+      // against the manifest schema before the callback runs — the connector
+      // tests pin schema/handler agreement against the live tools/list.
+      TOOL_HANDLERS[tool.name](ctx) as unknown as ToolCallback<ZodRawShape>,
+    );
+  }
 }
 
 export function handleMcpNonPost(): Response {
@@ -430,7 +387,7 @@ export async function handleMcpPost(
     name: MCP_SERVER_NAME,
     version: MCP_SERVER_VERSION,
   });
-  registerBoardTools(server, ctx.db, ctx.dataDir, ctx.actor);
+  registerBoardTools(server, ctx);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

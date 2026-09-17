@@ -22,6 +22,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# browser tooling session junk (playwright MCP)
+.playwright-mcp/
+
 # editors
 .idea/
 .vscode/*

@@ -17,6 +17,7 @@ import {
   runTokenCommand,
   TOKEN_USAGE,
 } from "./commands/token.ts";
+import { runMcpConnector } from "./mcp-connector.ts";
 
 const USAGE = `board — local-first shared boards
 
@@ -41,6 +42,9 @@ commands:
                        $BOARD_INSTANCE): end boards, keep zip keepsakes, purge
                        temp data + env
   instances            list session instances (live; --all closed; --prune stale)
+  mcp                  run the stdio MCP connector for agent harnesses (also:
+                       node cli/src/mcp-connector.ts — resolves the shared
+                       daemon or a session instance per request)
 
 Session instances (board up): list/open/export/import/status and token
 add/list/revoke accept --instance <id> (or BOARD_INSTANCE — set by sourceing
@@ -151,6 +155,13 @@ export async function main(argv: string[]): Promise<number> {
         argv: rest,
         io: consoleIo(),
       });
+    case "mcp":
+      // Stdio MCP connector (wave 1): the agent-harness entry — opencode
+      // spawns it so tools always list, and it resolves a real backend per
+      // request (shared daemon when healthy, else the newest healthy session
+      // instance). Reads env/registry, proxies HTTP; never writes (invariant
+      // 3). Also runnable without bun: node cli/src/mcp-connector.ts.
+      return await runMcpConnector();
     default:
       console.error(`board: unknown command "${command}"`);
       console.error(USAGE);
