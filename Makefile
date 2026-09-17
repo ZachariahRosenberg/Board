@@ -38,8 +38,9 @@ dev:
 	wait
 
 # `make token add myagent` — pass-through args (plan.md: make token add|list| revoke AGENT);
-# names are permanent (D17) — mint a new name rather than re-adding a taken one.
-# make token add <name> FLAGS=--force to re-mint a taken name (D17)
+# names are permanent (D17): adding a taken name fails — either mint a fresh name, or
+# re-mint the taken one with `make token add <name> FLAGS=--force` (revokes the old
+# credential, new plaintext lands under the first free suffix).
 token:
 	bun run cli/src/main.ts token $(filter-out $@,$(MAKECMDGOALS)) $(FLAGS)
 %:
