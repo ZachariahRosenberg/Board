@@ -136,6 +136,8 @@ The liveness probe `make install` and the Dockerfile `HEALTHCHECK` use.
 
 Streamable HTTP in **stateless JSON mode** (D16): one request = one JSON response; a fresh server + transport per POST — no sessions, no GET SSE stream (**non-POST → 405** `method_not_allowed`, `Allow: POST`). Auth: agent token via `Authorization: Bearer` or `?token=` — a **valid human session token is rejected** (401, D16). Same hardening as `/api` (Host allowlist, cross-site, JSON-only, 8 MB cap). Tools call the same service layer as REST — the event log cannot tell an MCP agent from a REST agent.
 
+> The endpoint is unchanged by D22; only the shipped *wiring* changed. Agent harnesses no longer point at this URL directly — they spawn the local stdio connector (`board mcp`, or `node cli/src/mcp-connector.ts`), which lists tools offline and proxies calls to this endpoint on whichever board server is up (shared daemon or D20 session instance). Everything below describes this endpoint as-is.
+
 Tool results are `{content: [{type: "text", text: <JSON>}]}`; store errors come back as `isError: true` with a plain-text message (never JSON-RPC protocol errors); `board_publish` conflict messages append `(current_version: N)` so a retry needs no second round-trip.
 
 The 13 tools:

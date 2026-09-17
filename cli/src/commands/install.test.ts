@@ -14,8 +14,9 @@ import { join } from "node:path";
 import { type ParseError, parse } from "jsonc-parser";
 import { openDb } from "../../../server/src/db.ts";
 import {
-  BOARD_MCP_URL,
   INSTALL_USAGE,
+  MCP_CONNECTOR_COMMAND,
+  MCP_CONNECTOR_PATH,
   mergeOpencodeConfig,
   OpencodeConfigError,
   runInstallCommand,
@@ -152,9 +153,10 @@ describe("board install opencode config merge", () => {
         mcp: {
           board: {
             type: string;
-            url: string;
+            command: string[];
             enabled: boolean;
-            headers: { Authorization: string };
+            timeout: number;
+            environment: { BOARD_MCP_TOKEN: string };
           };
         };
       };
@@ -162,12 +164,16 @@ describe("board install opencode config merge", () => {
       expect(config.model).toBe("anthropic/claude-opus-4");
       expect(config.plugin["gh-pr"]).toBe(true);
       const board = config.mcp.board;
-      expect(board.type).toBe("remote");
-      expect(board.url).toBe(BOARD_MCP_URL);
+      expect(board.type).toBe("local");
+      expect(board.command).toEqual([
+        MCP_CONNECTOR_COMMAND,
+        MCP_CONNECTOR_PATH,
+      ]);
       expect(board.enabled).toBe(true);
+      expect(board.timeout).toBe(60000);
       const token = tokenLines(out)[0];
       expect(token).toBeDefined();
-      expect(board.headers.Authorization).toBe(`Bearer ${token}`);
+      expect(board.environment.BOARD_MCP_TOKEN).toBe(token);
       db.close();
     });
   });
@@ -191,30 +197,109 @@ describe("board install opencode config merge", () => {
         mcp: {
           board: {
             type: string;
-            url: string;
+            command: string[];
             enabled: boolean;
-            headers: { Authorization: string };
+            timeout: number;
+            environment: { BOARD_MCP_TOKEN: string };
           };
         };
       };
       expect(errors).toEqual([]);
-      expect(config.mcp.board.type).toBe("remote");
-      expect(config.mcp.board.url).toBe(BOARD_MCP_URL);
+      expect(config.mcp.board.type).toBe("local");
+      expect(config.mcp.board.command).toEqual([
+        MCP_CONNECTOR_COMMAND,
+        MCP_CONNECTOR_PATH,
+      ]);
       expect(config.mcp.board.enabled).toBe(true);
-      expect(config.mcp.board.headers.Authorization).toBe(
-        `Bearer ${tokenLines(out)[0]}`,
+      expect(config.mcp.board.timeout).toBe(60000);
+      expect(config.mcp.board.environment.BOARD_MCP_TOKEN).toBe(
+        tokenLines(out)[0],
       );
       db.close();
     });
   });
 
+  test("replaces an old remote (pre-D22) entry, still preserving comments", () => {
+    withIsolatedEnv(({ xdg }) => {
+      const dir = join(xdg, "opencode");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "opencode.jsonc"),
+        `{
+  // a human comment that must survive the upgrade
+  "model": "anthropic/claude-opus-4",
+  "mcp": {
+    "board": {
+      // the pre-D22 remote wiring — replaced wholesale
+      "type": "remote",
+      "url": "http://127.0.0.1:7800/mcp",
+      "enabled": true,
+      "headers": { "Authorization": "Bearer stale" }
+    }
+  }
+}
+`,
+      );
+      const db = freshDb();
+      const { out, err, io } = capture();
+      const code = runInstallCommand({
+        db,
+        argv: ["--agents", "opencode"],
+        io,
+        checkHealth: HEALTHY,
+        claudeOnPath: NO_CLAUDE,
+      });
+      expect(code).toBe(0);
+      expect(err).toEqual([]);
+      const raw = readFileSync(join(dir, "opencode.jsonc"), "utf8");
+      expect(raw).toContain("// a human comment that must survive the upgrade");
+      const errors: ParseError[] = [];
+      const config = parse(raw, errors) as {
+        mcp: {
+          board: {
+            type: string;
+            url?: string;
+            headers?: unknown;
+            command: string[];
+            timeout: number;
+            environment: { BOARD_MCP_TOKEN: string };
+          };
+        };
+      };
+      expect(errors).toEqual([]);
+      const board = config.mcp.board;
+      expect(board.type).toBe("local");
+      expect(board.command).toEqual([
+        MCP_CONNECTOR_COMMAND,
+        MCP_CONNECTOR_PATH,
+      ]);
+      expect(board.url).toBeUndefined();
+      expect(board.headers).toBeUndefined();
+      expect(board.timeout).toBe(60000);
+      expect(board.environment.BOARD_MCP_TOKEN).toBe(tokenLines(out)[0]);
+      db.close();
+    });
+  });
+
+  test("repo root derives from the module location, not the cwd", () => {
+    // Absolute, pointing at the real connector file next to this repo —
+    // derived independently of process.cwd() (bun test runs at the repo root,
+    // so the path is recomputed here from the test's own module location).
+    expect(MCP_CONNECTOR_PATH.startsWith("/")).toBe(true);
+    expect(MCP_CONNECTOR_PATH).toBe(
+      join(import.meta.dir, "..", "mcp-connector.ts"),
+    );
+    expect(existsSync(MCP_CONNECTOR_PATH)).toBe(true);
+  });
+
   test("mergeOpencodeConfig rejects invalid JSONC with a parse-error message", () => {
     try {
       mergeOpencodeConfig('{ "mcp": }', {
-        type: "remote",
-        url: BOARD_MCP_URL,
+        type: "local",
+        command: [MCP_CONNECTOR_COMMAND, MCP_CONNECTOR_PATH],
         enabled: true,
-        headers: { Authorization: "Bearer x" },
+        timeout: 60000,
+        environment: { BOARD_MCP_TOKEN: "x" },
       });
       throw new Error("expected OpencodeConfigError");
     } catch (err) {
@@ -303,7 +388,7 @@ describe("board install tokens", () => {
     });
   });
 
-  test("prints each token exactly once on stdout, never on stderr, and never writes tokens to files except the opencode Authorization header", () => {
+  test("prints each token exactly once on stdout, never on stderr, and never writes tokens to files except the opencode entry's environment", () => {
     withIsolatedEnv(({ home, xdg }) => {
       const db = freshDb();
       const { out, err, io } = capture();
@@ -389,19 +474,79 @@ describe("board install wiring", () => {
       });
       expect(code).toBe(0);
       expect(calls).toHaveLength(1);
+      // Stdio form (D22), verified against `claude mcp add --help`: name, then
+      // --env KEY=value, then `--` and the connector command (transport
+      // defaults to stdio; no --transport/--header/--url needed).
       expect(calls[0]).toEqual([
         "mcp",
         "add",
-        "--transport",
-        "http",
         "--scope",
         "user",
         "board",
-        BOARD_MCP_URL,
-        "--header",
-        `Authorization: Bearer ${tokenLines(out)[0]}`,
+        "--env",
+        `BOARD_MCP_TOKEN=${tokenLines(out)[0]}`,
+        "--",
+        MCP_CONNECTOR_COMMAND,
+        MCP_CONNECTOR_PATH,
       ]);
       expect(out.join("\n")).not.toContain("manually");
+      db.close();
+    });
+  });
+
+  test("claude manual fallback prints the stdio add command with a placeholder token", () => {
+    withIsolatedEnv(({ home }) => {
+      const db = freshDb();
+      const { out, err, io } = capture();
+      const code = runInstallCommand({
+        db,
+        argv: ["--agents", "claude"],
+        io,
+        checkHealth: HEALTHY,
+        claudeOnPath: NO_CLAUDE,
+      });
+      expect(code).toBe(0); // guidance, not a failure
+      const text = out.join("\n");
+      expect(text).toContain(
+        "claude mcp add --scope user board --env BOARD_MCP_TOKEN=<board-claude-token>",
+      );
+      expect(text).toContain(
+        `-- ${MCP_CONNECTOR_COMMAND} ${MCP_CONNECTOR_PATH}`,
+      );
+      expect(text).toContain("<board-claude-token>");
+      expect(tokenLines(err)).toEqual([]);
+      // the skill still copies even when the CLI is absent
+      expect(
+        existsSync(join(home, ".claude", "skills", "board", "SKILL.md")),
+      ).toBe(true);
+      db.close();
+    });
+  });
+
+  test("codex/pi print command-form TOML snippets pointing at the connector", () => {
+    withIsolatedEnv(() => {
+      const db = freshDb();
+      const { out, err, io } = capture();
+      const code = runInstallCommand({
+        db,
+        argv: ["--agents", "codex,pi"],
+        io,
+        checkHealth: HEALTHY,
+        claudeOnPath: NO_CLAUDE,
+      });
+      expect(code).toBe(0);
+      expect(err).toEqual([]);
+      const text = out.join("\n");
+      expect(text).toContain(`command = "${MCP_CONNECTOR_COMMAND}"`);
+      expect(text).toContain(`args = ["${MCP_CONNECTOR_PATH}"]`);
+      expect(text).toContain(
+        `env = { "BOARD_MCP_TOKEN" = "<board-codex-token>" }`,
+      );
+      expect(text).toContain(
+        `env = { "BOARD_MCP_TOKEN" = "<board-pi-token>" }`,
+      );
+      // no remote/url leftovers in the snippet form
+      expect(text).not.toContain("http://127.0.0.1:7800/mcp");
       db.close();
     });
   });
@@ -422,6 +567,9 @@ describe("board install failure modes", () => {
       expect(code).toBe(0);
       expect(err.join("\n")).toContain("daemon not running");
       expect(err.join("\n")).toContain("make serve");
+      // D22: the warning explains wiring is daemon-independent now
+      expect(err.join("\n")).toContain("wiring works regardless");
+      expect(err.join("\n")).toContain("persistent library");
       expect(existsSync(join(xdg, "opencode", "opencode.jsonc"))).toBe(true);
       expect(tokenLines(out)).toHaveLength(1);
       db.close();
@@ -444,7 +592,7 @@ describe("board install failure modes", () => {
       expect(err.join("\n")).toContain("failed to wire: claude");
       const text = out.join("\n");
       expect(text).toContain(
-        "claude mcp add --transport http --scope user board",
+        "claude mcp add --scope user board --env BOARD_MCP_TOKEN=<board-claude-token>",
       );
       expect(text).toContain("--scope user");
       expect(text).toContain("<board-claude-token>");
@@ -476,6 +624,10 @@ describe("board install failure modes", () => {
       expect(err.join("\n")).toContain("not valid JSONC");
       expect(tokenLines(err)).toEqual([]);
       expect(err.join("\n")).toContain("<board-opencode-token>");
+      // the manual fix shows the D22 local shape, not the old remote entry
+      expect(err.join("\n")).toContain('"type": "local"');
+      expect(err.join("\n")).toContain('"timeout": 60000');
+      expect(err.join("\n")).toContain(MCP_CONNECTOR_PATH);
       expect(tokenLines(out)).toHaveLength(1);
       db.close();
     });
@@ -513,12 +665,16 @@ describe("board install dispatch", () => {
     stderr: string;
   }
 
-  function runCli(args: string[], env: Record<string, string>): Proc {
+  function runCli(
+    args: string[],
+    env: Record<string, string>,
+    cwd: string = join(import.meta.dir, "..", "..", ".."),
+  ): Proc {
     const proc = Bun.spawnSync(
       [process.execPath, join(import.meta.dir, "..", "main.ts"), ...args],
       {
         env,
-        cwd: join(import.meta.dir, "..", "..", ".."),
+        cwd,
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -555,9 +711,37 @@ describe("board install dispatch", () => {
     );
     const errors: ParseError[] = [];
     const config = parse(raw, errors) as {
-      mcp: { board: { headers: { Authorization: string } } };
+      mcp: { board: { environment: { BOARD_MCP_TOKEN: string } } };
     };
     expect(errors).toEqual([]);
-    expect(config.mcp.board.headers.Authorization).toBe(`Bearer ${printed[0]}`);
+    expect(config.mcp.board.environment.BOARD_MCP_TOKEN).toBe(printed[0]);
+  });
+
+  test("subprocess: wiring from a foreign cwd still points at the repo connector (D22 repo-root derivation)", () => {
+    const home = mkdtempSync(join(tmpdir(), "board-install-main-"));
+    const data = mkdtempSync(join(tmpdir(), "board-install-data-"));
+    const foreignCwd = mkdtempSync(join(tmpdir(), "board-install-cwd-"));
+    dirs.push(home, data, foreignCwd);
+    const proc = runCli(
+      ["install", "--agents", "opencode"],
+      { HOME: home, BOARD_DATA_DIR: data },
+      foreignCwd,
+    );
+    expect(proc.exitCode).toBe(0);
+    const raw = readFileSync(
+      join(home, ".config", "opencode", "opencode.jsonc"),
+      "utf8",
+    );
+    const errors: ParseError[] = [];
+    const config = parse(raw, errors) as {
+      mcp: { board: { command: string[] } };
+    };
+    expect(errors).toEqual([]);
+    // cwd was a temp dir — only a module-location derivation can produce the
+    // repo's real connector path here.
+    expect(config.mcp.board.command).toEqual([
+      MCP_CONNECTOR_COMMAND,
+      MCP_CONNECTOR_PATH,
+    ]);
   });
 });

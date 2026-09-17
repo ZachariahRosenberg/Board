@@ -3,6 +3,17 @@
   "default_agent": "manager",
   "subagent_depth": 2,
   "model": "fireworks-ai/accounts/fireworks/models/glm-5p3-flash",
+  "mcp": {
+    "board": {
+      "type": "local",
+      "command": ["node", "cli/src/mcp-connector.ts"],
+      "enabled": true,
+      "timeout": 60000,
+      "environment": {
+        "BOARD_MCP_TOKEN": "{env:BOARD_MCP_TOKEN}"
+      }
+    }
+  },
   "agent": {
     "plan": {
       "mode": "all",
